@@ -3524,6 +3524,117 @@ func TestCreateAndSubmitPullRequestReview(t *testing.T) {
 	}
 }
 
+func TestCreatePullRequestReviewWithInlineComments(t *testing.T) {
+	t.Parallel()
+
+	schema := PullRequestReviewWrite(translations.NullTranslationHelper).Tool.InputSchema.(*jsonschema.Schema)
+	assert.Contains(t, schema.Properties, "comments")
+
+	pullRequestQuery := githubv4mock.NewQueryMatcher(
+		struct {
+			Repository struct {
+				PullRequest struct {
+					ID githubv4.ID
+				} `graphql:"pullRequest(number: $prNum)"`
+			} `graphql:"repository(owner: $owner, name: $repo)"`
+		}{},
+		map[string]any{
+			"owner": githubv4.String("owner"),
+			"repo":  githubv4.String("repo"),
+			"prNum": githubv4.Int(42),
+		},
+		githubv4mock.DataResponse(map[string]any{
+			"repository": map[string]any{"pullRequest": map[string]any{"id": "PR_kwDODKw3uc6WYN1T"}},
+		}),
+	)
+	right, left := githubv4.DiffSideRight, githubv4.DiffSideLeft
+	threads := []*githubv4.DraftPullRequestReviewThread{
+		{
+			Path: githubv4.NewString("main.go"),
+			Body: githubv4.String("Handle the error"),
+			Line: githubv4.NewInt(12),
+			Side: &right,
+		},
+		{
+			Path:      githubv4.NewString("old.go"),
+			Body:      githubv4.String("This block was needed"),
+			Line:      githubv4.NewInt(8),
+			Side:      &left,
+			StartLine: githubv4.NewInt(5),
+			StartSide: &left,
+		},
+	}
+	mutation := githubv4mock.NewMutationMatcher(
+		struct {
+			AddPullRequestReview struct {
+				PullRequestReview struct {
+					ID githubv4.ID
+				}
+			} `graphql:"addPullRequestReview(input: $input)"`
+		}{},
+		githubv4.AddPullRequestReviewInput{
+			PullRequestID: githubv4.ID("PR_kwDODKw3uc6WYN1T"),
+			Body:          githubv4.NewString("Two things to fix"),
+			Event:         githubv4mock.Ptr(githubv4.PullRequestReviewEventRequestChanges),
+			Threads:       &threads,
+		},
+		nil,
+		githubv4mock.DataResponse(map[string]any{}),
+	)
+	comments := []any{
+		map[string]any{"path": "main.go", "line": 12, "body": "Handle the error"},
+		map[string]any{"path": "old.go", "line": 8, "side": "LEFT", "start_line": 5, "body": "This block was needed"},
+	}
+
+	tests := []struct {
+		name         string
+		args         map[string]any
+		expectedText string
+		expectError  bool
+	}{
+		{
+			name: "submits the review and its inline comments in one call",
+			args: map[string]any{
+				"method": "create", "owner": "owner", "repo": "repo", "pullNumber": float64(42),
+				"body": "Two things to fix", "event": "REQUEST_CHANGES", "comments": comments,
+			},
+			expectedText: "pull request review submitted successfully with 2 inline comments",
+		},
+		{
+			name: "rejects comments on other methods",
+			args: map[string]any{
+				"method": "submit_pending", "owner": "owner", "repo": "repo", "pullNumber": float64(42),
+				"event": "COMMENT", "comments": comments,
+			},
+			expectedText: "comments can only be used with the create method",
+			expectError:  true,
+		},
+		{
+			name: "rejects a start_line after line",
+			args: map[string]any{
+				"method": "create", "owner": "owner", "repo": "repo", "pullNumber": float64(42), "event": "COMMENT",
+				"comments": []any{map[string]any{"path": "main.go", "line": 3, "start_line": 9, "body": "Range"}},
+			},
+			expectedText: "comments[0]: start_line must be between 1 and line",
+			expectError:  true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			client := githubv4.NewClient(githubv4mock.NewMockedHTTPClient(pullRequestQuery, mutation))
+			serverTool := PullRequestReviewWrite(translations.NullTranslationHelper)
+			deps := BaseDeps{GQLClient: client}
+			request := createMCPRequest(tc.args)
+			result, err := serverTool.Handler(deps)(ContextWithDeps(context.Background(), deps), &request)
+			require.NoError(t, err)
+			assert.Equal(t, tc.expectError, result.IsError)
+			assert.Equal(t, tc.expectedText, getTextResult(t, result).Text)
+		})
+	}
+}
+
 func TestCreatePendingPullRequestReview(t *testing.T) {
 	t.Parallel()
 

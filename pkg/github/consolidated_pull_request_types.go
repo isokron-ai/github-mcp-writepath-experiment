@@ -72,15 +72,26 @@ type UpdatePullRequestBranchInput struct {
 // PullRequestReviewWriteInput covers both feature variants; resolutionReason
 // is advertised and used only by the resolution-reason variant.
 type PullRequestReviewWriteInput struct {
-	Method           string  `json:"method"`
-	Owner            string  `json:"owner"`
-	Repo             string  `json:"repo"`
-	PullNumber       int     `json:"pullNumber"`
-	Body             string  `json:"body,omitempty"`
-	Event            string  `json:"event,omitempty"`
-	CommitID         *string `json:"commitID,omitempty"`
-	ThreadID         string  `json:"threadId,omitempty"`
-	ResolutionReason *string `json:"resolutionReason,omitempty"`
+	Method           string                          `json:"method"`
+	Owner            string                          `json:"owner"`
+	Repo             string                          `json:"repo"`
+	PullNumber       int                             `json:"pullNumber"`
+	Body             string                          `json:"body,omitempty"`
+	Event            string                          `json:"event,omitempty"`
+	CommitID         *string                         `json:"commitID,omitempty"`
+	ThreadID         string                          `json:"threadId,omitempty"`
+	ResolutionReason *string                         `json:"resolutionReason,omitempty"`
+	Comments         []PullRequestReviewCommentInput `json:"comments,omitempty"`
+}
+
+// PullRequestReviewCommentInput is one inline comment of a review created with pull_request_review_write.
+type PullRequestReviewCommentInput struct {
+	Path      string `json:"path" mapstructure:"path"`
+	Line      int32  `json:"line" mapstructure:"line"`
+	Side      string `json:"side,omitempty" mapstructure:"side"`
+	StartLine int32  `json:"start_line,omitempty" mapstructure:"start_line"`
+	StartSide string `json:"start_side,omitempty" mapstructure:"start_side"`
+	Body      string `json:"body" mapstructure:"body"`
 }
 
 type AddCommentToPendingReviewInput struct {

@@ -610,7 +610,7 @@ func TestTypedIssueWriteMutationOptionalityAndFields(t *testing.T) {
 					Labels []string `json:"labels"`
 				}
 				require.NoError(t, json.Unmarshal(body, &sent))
-				response := &github.Issue{ID: new(int64(123)), HTMLURL: new("https://github.com/owner/repo/issues/1")}
+				response := &github.Issue{ID: new(int64(123)), Number: new(1), HTMLURL: new("https://github.com/owner/repo/issues/1")}
 				for _, label := range sent.Labels {
 					response.Labels = append(response.Labels, &github.Label{Name: label})
 				}
