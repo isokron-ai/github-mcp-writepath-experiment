@@ -77,6 +77,7 @@ type UpdateIssueCommentInput struct {
 
 type IssueCommentOutput struct {
 	ID      string `json:"id"`
+	Number  int    `json:"number,omitempty"`
 	HTMLURL string `json:"html_url,omitempty"`
 }
 
@@ -180,6 +181,9 @@ func issueCommentOutputObjectSchema(includeURL bool) *jsonschema.Schema {
 			Type: "string", Description: "The web URL of the created issue comment.",
 		}
 		required = append(required, "html_url")
+		properties["number"] = &jsonschema.Schema{
+			Type: "integer", Description: "The number of the issue or pull request the comment is on.",
+		}
 	}
 	return &jsonschema.Schema{
 		Type: "object", Properties: properties, Required: required,

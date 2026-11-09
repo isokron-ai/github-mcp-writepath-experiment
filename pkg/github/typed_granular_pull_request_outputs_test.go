@@ -43,7 +43,7 @@ type granularPRCase struct {
 	payload string
 }
 
-const granularPRReference = `{"id":"123","url":"https://github.com/owner/repo/pull/1"}`
+const granularPRReference = `{"id":"123","url":"https://github.com/owner/repo/pull/1","number":1,"html_url":"https://github.com/owner/repo/pull/1"}`
 
 func granularPRCases() []granularPRCase {
 	return []granularPRCase{
@@ -128,7 +128,7 @@ func granularPRDeps(t *testing.T, current **granularPRCase, outcome string) Base
 		case strings.Contains(path, "/reactions"):
 			_, _ = w.Write([]byte(`{"id":77,"content":"heart"}`))
 		default:
-			_, _ = w.Write([]byte(`{"id":123,"html_url":"https://github.com/owner/repo/pull/1"}`))
+			_, _ = w.Write([]byte(`{"id":123,"number":1,"html_url":"https://github.com/owner/repo/pull/1"}`))
 		}
 	})}}
 	gql := &http.Client{Transport: recorderTransport{handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

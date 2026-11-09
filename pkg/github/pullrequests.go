@@ -501,6 +501,7 @@ type reviewThreadNode struct {
 
 type reviewCommentNode struct {
 	ID                githubv4.ID
+	FullDatabaseID    githubv4.String `graphql:"fullDatabaseId"`
 	Body              githubv4.String
 	Path              githubv4.String
 	Line              *githubv4.Int
@@ -902,8 +903,10 @@ func CreatePullRequest(t translations.TranslationHelperFunc) inventory.ServerToo
 
 			// Return minimal response with just essential information
 			minimalResponse := MinimalResponse{
-				ID:  fmt.Sprintf("%d", pr.GetID()),
-				URL: pr.GetHTMLURL(),
+				ID:      fmt.Sprintf("%d", pr.GetID()),
+				URL:     pr.GetHTMLURL(),
+				Number:  pr.GetNumber(),
+				HTMLURL: pr.GetHTMLURL(),
 			}
 
 			r, err := json.Marshal(minimalResponse)
@@ -1226,8 +1229,10 @@ func UpdatePullRequest(t translations.TranslationHelperFunc) inventory.ServerToo
 
 			// Return minimal response with just essential information
 			minimalResponse := MinimalResponse{
-				ID:  fmt.Sprintf("%d", finalPR.GetID()),
-				URL: finalPR.GetHTMLURL(),
+				ID:      fmt.Sprintf("%d", finalPR.GetID()),
+				URL:     finalPR.GetHTMLURL(),
+				Number:  finalPR.GetNumber(),
+				HTMLURL: finalPR.GetHTMLURL(),
 			}
 
 			r, err := json.Marshal(minimalResponse)
@@ -1260,7 +1265,7 @@ func AddReplyToPullRequestComment(t translations.TranslationHelperFunc) inventor
 			},
 			"commentId": {
 				Type:        "number",
-				Description: "The numeric ID of the pull request review comment to reply or react to. Use the number from a #discussion_r... anchor, not the GraphQL thread node ID (PRRT_...).",
+				Description: "The numeric ID of the pull request review comment to reply or react to: the comment's id from pull_request_read get_review_comments, or the number from a #discussion_r... anchor. Not the GraphQL thread node ID (PRRT_...).",
 				Minimum:     new(1.0),
 			},
 			"body": {
@@ -1370,8 +1375,10 @@ func AddReplyToPullRequestComment(t translations.TranslationHelperFunc) inventor
 				}
 
 				commentResponse = &MinimalResponse{
-					ID:  fmt.Sprintf("%d", comment.GetID()),
-					URL: comment.GetHTMLURL(),
+					ID:      fmt.Sprintf("%d", comment.GetID()),
+					URL:     comment.GetHTMLURL(),
+					Number:  pullNumber,
+					HTMLURL: comment.GetHTMLURL(),
 				}
 			}
 

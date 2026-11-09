@@ -96,7 +96,8 @@ func AddIssueLabels(t translations.TranslationHelperFunc) inventory.ServerTool {
 				DestructiveHint: new(false),
 				IdempotentHint:  true,
 			},
-			InputSchema: issueLabelsChangeSchema("Label names to add"),
+			InputSchema:  issueLabelsChangeSchema("Label names to add"),
+			OutputSchema: issueDTOschema[IssueLabelsChangeOutput](),
 		},
 		publicRepositoryWriteScopeAccess(),
 		func(ctx context.Context, deps ToolDependencies, _ *mcp.CallToolRequest, input IssueLabelsChangeInput) (*mcp.CallToolResult, *IssueLabelsChangeOutput, error) {
@@ -134,7 +135,8 @@ func RemoveIssueLabels(t translations.TranslationHelperFunc) inventory.ServerToo
 				DestructiveHint: new(true),
 				IdempotentHint:  true,
 			},
-			InputSchema: issueLabelsChangeSchema("Label names to remove"),
+			InputSchema:  issueLabelsChangeSchema("Label names to remove"),
+			OutputSchema: issueDTOschema[IssueLabelsChangeOutput](),
 		},
 		publicRepositoryWriteScopeAccess(),
 		func(ctx context.Context, deps ToolDependencies, _ *mcp.CallToolRequest, input IssueLabelsChangeInput) (*mcp.CallToolResult, *IssueLabelsChangeOutput, error) {

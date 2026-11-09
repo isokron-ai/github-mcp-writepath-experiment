@@ -201,7 +201,7 @@ func consolidatedIssueDeps(t *testing.T) BaseDeps {
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
 		switch {
 		case strings.Contains(req.Query, "createIssue("):
-			_, _ = w.Write([]byte(`{"data":{"createIssue":{"issue":{"fullDatabaseId":"123","url":"https://github.com/owner/repo/issues/1"}}}}`))
+			_, _ = w.Write([]byte(`{"data":{"createIssue":{"issue":{"fullDatabaseId":"123","number":1,"url":"https://github.com/owner/repo/issues/1"}}}}`))
 		case strings.Contains(req.Query, "parentRepository:"):
 			_, _ = w.Write([]byte(`{"data":{"childRepository":{"id":"R_1","nameWithOwner":"owner/repo"},"parentRepository":{"issue":{"id":"I_parent","number":7}}}}`))
 		case strings.Contains(req.Query, "parent{"):
@@ -244,7 +244,7 @@ func consolidatedIssueDeps(t *testing.T) BaseDeps {
 }
 
 func TestTypedConsolidatedIssueOutputs(t *testing.T) {
-	const mutationText = `{"id":"123","url":"https://github.com/owner/repo/issues/1"}`
+	const mutationText = `{"id":"123","url":"https://github.com/owner/repo/issues/1","number":1,"html_url":"https://github.com/owner/repo/issues/1"}`
 	const subText = `{"id":7,"number":7,"title":"Child","body":"body","created_at":"2026-01-01T00:00:00Z","issue_field_values":[{"issue_field_id":11,"node_id":"IF_11","data_type":"number","value":0}]}`
 	const subStructured = `{"id":7,"number":7,"title":"Child","body":"body","created_at":"2026-01-01T00:00:00Z","assignees":[],"field_values":[{"issue_field_id":11,"data_type":"number","value":0}]}`
 	cases := []struct {
@@ -366,7 +366,7 @@ func TestTypedIssueWriteAwaitingForm(t *testing.T) {
 					assert.Nil(t, result.StructuredContent)
 				}
 				args["_ui_submitted"] = true
-				assertConsolidatedResult(t, session, schemas, "issue_write", args, `{"id":"123","url":"https://github.com/owner/repo/issues/1"}`)
+				assertConsolidatedResult(t, session, schemas, "issue_write", args, `{"id":"123","url":"https://github.com/owner/repo/issues/1","number":1,"html_url":"https://github.com/owner/repo/issues/1"}`)
 			}
 		})
 	}
@@ -581,7 +581,7 @@ func TestTypedIssueCommentsCompactUsersAndLockdown(t *testing.T) {
 }
 
 func TestTypedIssueWriteMutationOptionalityAndFields(t *testing.T) {
-	const resultText = `{"id":"123","url":"https://github.com/owner/repo/issues/1"}`
+	const resultText = `{"id":"123","url":"https://github.com/owner/repo/issues/1","number":1,"html_url":"https://github.com/owner/repo/issues/1"}`
 	for _, protocol := range []string{inventory.ProtocolVersionMultiRoundTrip, "2025-11-25", ""} {
 		t.Run("protocol="+protocol, func(t *testing.T) {
 			var requestBody, fieldValuesBody string

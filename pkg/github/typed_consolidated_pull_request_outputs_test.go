@@ -256,13 +256,13 @@ func runTypedPullRequestCases(t *testing.T, session *mcp.ClientSession, schemas 
 		case tc.tool == "update_pull_request_branch":
 			assert.JSONEq(t, `{"message":"Pull request branch update is in progress"}`, mustMarshalJSON(t, value))
 		case tc.tool == "create_pull_request" || tc.tool == "update_pull_request":
-			assert.JSONEq(t, `{"id":"0","html_url":"https://github.com/owner/repo/pull/1"}`, mustMarshalJSON(t, value))
+			assert.JSONEq(t, `{"id":"0","number":1,"html_url":"https://github.com/owner/repo/pull/1"}`, mustMarshalJSON(t, value))
 		case tc.tool == "add_reply_to_pull_request_comment":
 			switch {
 			case tc.args["body"] != nil && tc.args["reaction"] != nil:
-				assert.JSONEq(t, `{"comment":{"id":"43","html_url":"https://github.com/owner/repo/pull/1#discussion_r43"},"reaction":{"id":"77"}}`, mustMarshalJSON(t, value))
+				assert.JSONEq(t, `{"comment":{"id":"43","number":1,"html_url":"https://github.com/owner/repo/pull/1#discussion_r43"},"reaction":{"id":"77"}}`, mustMarshalJSON(t, value))
 			case tc.args["body"] != nil:
-				assert.JSONEq(t, `{"id":"43","html_url":"https://github.com/owner/repo/pull/1#discussion_r43"}`, mustMarshalJSON(t, value))
+				assert.JSONEq(t, `{"id":"43","number":1,"html_url":"https://github.com/owner/repo/pull/1#discussion_r43"}`, mustMarshalJSON(t, value))
 			default:
 				assert.JSONEq(t, `{"id":"77"}`, mustMarshalJSON(t, value))
 			}
@@ -274,7 +274,7 @@ func runTypedPullRequestCases(t *testing.T, session *mcp.ClientSession, schemas 
 
 func TestTypedConsolidatedPullRequestOutputs(t *testing.T) {
 	const minimalPR = `{"number":1,"title":"Subject","body":"body","state":"open","draft":false,"merged":false,"mergeable_state":"clean","html_url":"https://github.com/owner/repo/pull/1","user":{"login":"octocat"},"head":{"ref":"feature","sha":"abc"},"base":{"ref":"main","sha":"def"},"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}`
-	const prRef = `{"id":"0","url":"https://github.com/owner/repo/pull/1"}`
+	const prRef = `{"id":"0","url":"https://github.com/owner/repo/pull/1","number":1,"html_url":"https://github.com/owner/repo/pull/1"}`
 	cases := []typedPullRequestCase{
 		{"pull_request_read", map[string]any{"method": "get", "pullNumber": "1"}, minimalPR},
 		{"pull_request_read", map[string]any{"method": "get", "pullNumber": 3}, `null`},
@@ -305,10 +305,10 @@ func TestTypedConsolidatedPullRequestOutputs(t *testing.T) {
 		{"pull_request_review_write", map[string]any{"method": "resolve_thread", "threadId": "T_1"}, "review thread resolved successfully"},
 		{"pull_request_review_write", map[string]any{"method": "unresolve_thread", "threadId": "T_1"}, "review thread unresolved successfully"},
 		{"add_comment_to_pending_review", map[string]any{"pullNumber": "1", "path": "file", "body": "nit", "subjectType": "LINE", "line": "3", "side": "RIGHT", "startLine": 2, "startSide": 7}, "pull request review comment successfully added to pending review"},
-		{"add_reply_to_pull_request_comment", map[string]any{"pullNumber": "1", "commentId": "42", "body": "reply"}, `{"id":"43","url":"https://github.com/owner/repo/pull/1#discussion_r43"}`},
+		{"add_reply_to_pull_request_comment", map[string]any{"pullNumber": "1", "commentId": "42", "body": "reply"}, `{"id":"43","url":"https://github.com/owner/repo/pull/1#discussion_r43","number":1,"html_url":"https://github.com/owner/repo/pull/1#discussion_r43"}`},
 		{"add_reply_to_pull_request_comment", map[string]any{"commentId": 42, "pullNumber": "x", "reaction": "heart"}, `{"id":"77","url":"https://api.github.com/repos/owner/repo/pulls/comments/42/reactions/77"}`},
 		{"add_reply_to_pull_request_comment", map[string]any{"commentId": 42, "reaction": "heart"}, `{"id":"77","url":"https://api.github.com/repos/owner/repo/pulls/comments/42/reactions/77"}`},
-		{"add_reply_to_pull_request_comment", map[string]any{"pullNumber": 1, "commentId": 42.0, "body": "reply", "reaction": "heart"}, `{"comment":{"id":"43","url":"https://github.com/owner/repo/pull/1#discussion_r43"},"reaction":{"id":"77","url":"https://api.github.com/repos/owner/repo/pulls/comments/42/reactions/77"}}`},
+		{"add_reply_to_pull_request_comment", map[string]any{"pullNumber": 1, "commentId": 42.0, "body": "reply", "reaction": "heart"}, `{"comment":{"id":"43","url":"https://github.com/owner/repo/pull/1#discussion_r43","number":1,"html_url":"https://github.com/owner/repo/pull/1#discussion_r43"},"reaction":{"id":"77","url":"https://api.github.com/repos/owner/repo/pulls/comments/42/reactions/77"}}`},
 	}
 	for _, protocol := range typedPullRequestProtocols {
 		t.Run("protocol="+protocol, func(t *testing.T) {
@@ -393,7 +393,7 @@ func TestTypedPullRequestWriteAwaitingForm(t *testing.T) {
 					assert.Nil(t, result.StructuredContent)
 				}
 				args["_ui_submitted"] = true
-				runTypedPullRequestCases(t, session, schemas, []typedPullRequestCase{{tool, args, `{"id":"0","url":"https://github.com/owner/repo/pull/1"}`}})
+				runTypedPullRequestCases(t, session, schemas, []typedPullRequestCase{{tool, args, `{"id":"0","url":"https://github.com/owner/repo/pull/1","number":1,"html_url":"https://github.com/owner/repo/pull/1"}`}})
 			}
 		})
 	}

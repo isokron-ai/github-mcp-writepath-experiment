@@ -208,11 +208,12 @@ func pullRequestWriteOutputSchema() *jsonschema.Schema {
 // Reactions have no browser URL; their API endpoint is not useful output.
 type PullRequestMutationReference struct {
 	ID      string `json:"id"`
+	Number  int    `json:"number,omitempty"`
 	HTMLURL string `json:"html_url,omitempty"`
 }
 
 func pullRequestMutationReference(response MinimalResponse) *PullRequestMutationReference {
-	return &PullRequestMutationReference{ID: response.ID, HTMLURL: response.URL}
+	return &PullRequestMutationReference{ID: response.ID, Number: response.Number, HTMLURL: response.URL}
 }
 
 func pullRequestFormArguments(req *mcp.CallToolRequest, args map[string]any) (map[string]any, error) {

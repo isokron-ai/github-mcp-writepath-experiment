@@ -2268,6 +2268,7 @@ func Test_GetPullRequestComments(t *testing.T) {
 												"nodes": []map[string]any{
 													{
 														"id":                "PRRC_kwDOA0xdyM4AX1Y0",
+														"fullDatabaseId":    "3000000101",
 														"body":              "This looks good",
 														"path":              "file1.go",
 														"line":              86,
@@ -2351,6 +2352,7 @@ func Test_GetPullRequestComments(t *testing.T) {
 
 				// Validate first comment
 				comment1 := thread.Comments[0]
+				assert.Equal(t, int64(3000000101), comment1.ID, "the numeric ID add_reply_to_pull_request_comment takes")
 				assert.Equal(t, "This looks good", comment1.Body)
 				assert.Equal(t, "file1.go", comment1.Path)
 				assert.Equal(t, "reviewer1", comment1.Author)
@@ -2383,6 +2385,8 @@ func Test_GetPullRequestComments(t *testing.T) {
 				assert.Equal(t, float64(84), raw.ReviewThreads[0].Comments[0]["original_line"])
 				assert.Equal(t, float64(73), raw.ReviewThreads[0].Comments[0]["start_line"])
 				assert.Equal(t, float64(73), raw.ReviewThreads[0].Comments[0]["original_start_line"])
+				assert.Equal(t, float64(3000000101), raw.ReviewThreads[0].Comments[0]["id"])
+				assert.NotContains(t, raw.ReviewThreads[0].Comments[1], "id", "an unknown ID is omitted, not reported as 0")
 				assert.NotContains(t, raw.ReviewThreads[0].Comments[1], "start_line")
 				assert.NotContains(t, raw.ReviewThreads[0].Comments[1], "original_start_line")
 				assert.NotContains(t, raw.ReviewThreads[0].Comments[2], "line")
@@ -4516,6 +4520,15 @@ func TestAddReplyToPullRequestComment(t *testing.T) {
 		assert.Equal(t, expectedID, response["id"])
 		assert.Equal(t, expectedURL, response["url"])
 	}
+	// A reply also reports the pull request number and its browser URL.
+	assertReplyResponse := func(t *testing.T, response map[string]any) {
+		t.Helper()
+		assert.Len(t, response, 4)
+		assert.Equal(t, "456", response["id"])
+		assert.Equal(t, "https://github.com/owner/repo/pull/42#discussion_r456", response["url"])
+		assert.Equal(t, float64(42), response["number"])
+		assert.Equal(t, "https://github.com/owner/repo/pull/42#discussion_r456", response["html_url"])
+	}
 
 	tests := []struct {
 		name               string
@@ -4741,12 +4754,12 @@ func TestAddReplyToPullRequestComment(t *testing.T) {
 				assert.Len(t, response, 2)
 				commentResponse, ok := response["comment"].(map[string]any)
 				require.True(t, ok)
-				assertMinimalResponse(t, commentResponse, "456", "https://github.com/owner/repo/pull/42#discussion_r456")
+				assertReplyResponse(t, commentResponse)
 				reactionResponse, ok := response["reaction"].(map[string]any)
 				require.True(t, ok)
 				assertMinimalResponse(t, reactionResponse, "789", reactionURL)
 			case hasBody:
-				assertMinimalResponse(t, response, "456", "https://github.com/owner/repo/pull/42#discussion_r456")
+				assertReplyResponse(t, response)
 			default:
 				assertMinimalResponse(t, response, "789", reactionURL)
 			}

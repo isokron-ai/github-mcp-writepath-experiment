@@ -1468,8 +1468,10 @@ func AddIssueComment(t translations.TranslationHelperFunc) inventory.ServerTool 
 				}
 
 				commentResponse = &MinimalResponse{
-					ID:  fmt.Sprintf("%d", createdComment.GetID()),
-					URL: createdComment.GetHTMLURL(),
+					ID:      fmt.Sprintf("%d", createdComment.GetID()),
+					URL:     createdComment.GetHTMLURL(),
+					Number:  issueNumber,
+					HTMLURL: createdComment.GetHTMLURL(),
 				}
 			}
 
@@ -1481,7 +1483,7 @@ func AddIssueComment(t translations.TranslationHelperFunc) inventory.ServerTool 
 					Comment: *commentResponse, Reaction: *reactionResponse,
 				}
 				result.Combined = &IssueCommentAndReactionOutput{
-					Comment:  IssueCommentOutput{ID: commentResponse.ID, HTMLURL: commentResponse.URL},
+					Comment:  IssueCommentOutput{ID: commentResponse.ID, HTMLURL: commentResponse.URL, Number: commentResponse.Number},
 					Reaction: IssueReactionOutput{ID: reactionResponse.ID},
 				}
 			case hasReaction:
@@ -1490,7 +1492,7 @@ func AddIssueComment(t translations.TranslationHelperFunc) inventory.ServerTool 
 			default:
 				legacyResult.Single = commentResponse
 				if commentResponse != nil {
-					result.Single = &IssueCommentOutput{ID: commentResponse.ID, HTMLURL: commentResponse.URL}
+					result.Single = &IssueCommentOutput{ID: commentResponse.ID, HTMLURL: commentResponse.URL, Number: commentResponse.Number}
 				}
 			}
 
@@ -1580,11 +1582,15 @@ func UpdateIssueComment(t translations.TranslationHelperFunc) inventory.ServerTo
 				return ghErrors.NewGitHubAPIErrorResponse(ctx, "failed to update issue comment", resp, err), nil, nil
 			}
 
+			// The issue number is informational, so an unparsable issue URL leaves it out.
+			issueNumber, _ := issueNumberFromIssueURL(updatedComment.GetIssueURL())
 			legacyOutput := &MinimalResponse{
-				ID:  fmt.Sprintf("%d", updatedComment.GetID()),
-				URL: updatedComment.GetHTMLURL(),
+				ID:      fmt.Sprintf("%d", updatedComment.GetID()),
+				URL:     updatedComment.GetHTMLURL(),
+				Number:  issueNumber,
+				HTMLURL: updatedComment.GetHTMLURL(),
 			}
-			output := &IssueCommentOutput{ID: legacyOutput.ID, HTMLURL: legacyOutput.URL}
+			output := &IssueCommentOutput{ID: legacyOutput.ID, HTMLURL: legacyOutput.URL, Number: issueNumber}
 			r, err := json.Marshal(legacyOutput)
 			if err != nil {
 				return utils.NewToolResultErrorFromErr("failed to marshal response", err), nil, nil
@@ -2961,6 +2967,7 @@ type createIssueMutation struct {
 	CreateIssue struct {
 		Issue struct {
 			FullDatabaseID githubv4.String `graphql:"fullDatabaseId"`
+			Number         githubv4.Int
 			URL            githubv4.URI
 		}
 	} `graphql:"createIssue(input: $input)"`
@@ -3072,8 +3079,10 @@ func createIssueWithParent(ctx context.Context, client *github.Client, gqlClient
 	}
 
 	response := MinimalResponse{
-		ID:  string(mutation.CreateIssue.Issue.FullDatabaseID),
-		URL: mutation.CreateIssue.Issue.URL.String(),
+		ID:      string(mutation.CreateIssue.Issue.FullDatabaseID),
+		URL:     mutation.CreateIssue.Issue.URL.String(),
+		Number:  int(mutation.CreateIssue.Issue.Number),
+		HTMLURL: mutation.CreateIssue.Issue.URL.String(),
 	}
 	encoded, err := json.Marshal(response)
 	if err != nil {
@@ -3284,8 +3293,10 @@ func createIssue(ctx context.Context, client *github.Client, owner string, repo 
 
 	// Return minimal response with just essential information
 	minimalResponse := MinimalResponse{
-		ID:  fmt.Sprintf("%d", issue.GetID()),
-		URL: issue.GetHTMLURL(),
+		ID:      fmt.Sprintf("%d", issue.GetID()),
+		URL:     issue.GetHTMLURL(),
+		Number:  issue.GetNumber(),
+		HTMLURL: issue.GetHTMLURL(),
 	}
 
 	r, err := json.Marshal(minimalResponse)
@@ -3457,8 +3468,10 @@ func updateIssue(ctx context.Context, client *github.Client, gqlClient *githubv4
 
 	// Return minimal response with just essential information
 	minimalResponse := MinimalResponse{
-		ID:  fmt.Sprintf("%d", updatedIssue.GetID()),
-		URL: updatedIssue.GetHTMLURL(),
+		ID:      fmt.Sprintf("%d", updatedIssue.GetID()),
+		URL:     updatedIssue.GetHTMLURL(),
+		Number:  updatedIssue.GetNumber(),
+		HTMLURL: updatedIssue.GetHTMLURL(),
 	}
 
 	r, err := json.Marshal(minimalResponse)

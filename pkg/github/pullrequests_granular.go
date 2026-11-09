@@ -106,8 +106,10 @@ func prUpdateTool[In interface {
 			defer func() { _ = resp.Body.Close() }()
 
 			output := &MinimalResponse{
-				ID:  fmt.Sprintf("%d", pr.GetID()),
-				URL: pr.GetHTMLURL(),
+				ID:      fmt.Sprintf("%d", pr.GetID()),
+				URL:     pr.GetHTMLURL(),
+				Number:  pr.GetNumber(),
+				HTMLURL: pr.GetHTMLURL(),
 			}
 			r, err := json.Marshal(output)
 			if err != nil {
@@ -312,8 +314,10 @@ func GranularRequestPullRequestReviewers(t translations.TranslationHelperFunc) i
 			defer func() { _ = resp.Body.Close() }()
 
 			output := &MinimalResponse{
-				ID:  fmt.Sprintf("%d", pr.GetID()),
-				URL: pr.GetHTMLURL(),
+				ID:      fmt.Sprintf("%d", pr.GetID()),
+				URL:     pr.GetHTMLURL(),
+				Number:  pr.GetNumber(),
+				HTMLURL: pr.GetHTMLURL(),
 			}
 			r, err := json.Marshal(output)
 			if err != nil {

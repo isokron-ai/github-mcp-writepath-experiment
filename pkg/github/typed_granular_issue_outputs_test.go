@@ -85,7 +85,7 @@ type granularIssueWireCase struct {
 	method     string
 }
 
-const granularMutationText = `{"id":"123","url":"https://github.com/owner/repo/issues/1"}`
+const granularMutationText = `{"id":"123","url":"https://github.com/owner/repo/issues/1","number":1,"html_url":"https://github.com/owner/repo/issues/1"}`
 const granularSubIssueAPIResponse = `{"id":7,"number":7,"title":"Child\u202e","body":"body\u202e","url":"https://api.github.com/repos/owner/repo/issues/7","html_url":"https://github.com/owner/repo/issues/7","comments_url":"https://api.github.com/repos/owner/repo/issues/7/comments","node_id":"I_7","issue_field_values":[{"issue_field_id":11,"node_id":"IF_11","data_type":"number","value":0},{"issue_field_id":12,"node_id":"IF_12","data_type":"text","value":""},{"issue_field_id":13,"node_id":"IF_13","data_type":"text","value":false},{"issue_field_id":14,"node_id":"IF_14","data_type":"text","value":null}]}`
 const granularSubIssueText = `{"id":7,"number":7,"title":"Child","body":"body","url":"https://api.github.com/repos/owner/repo/issues/7","html_url":"https://github.com/owner/repo/issues/7","comments_url":"https://api.github.com/repos/owner/repo/issues/7/comments","node_id":"I_7","issue_field_values":[{"issue_field_id":11,"node_id":"IF_11","data_type":"number","value":0},{"issue_field_id":12,"node_id":"IF_12","data_type":"text","value":""},{"issue_field_id":13,"node_id":"IF_13","data_type":"text","value":false},{"issue_field_id":14,"node_id":"IF_14","data_type":"text","value":null}]}`
 
@@ -180,7 +180,7 @@ func granularWireDeps(t *testing.T, current **granularIssueWireCase, fail bool) 
 		case strings.Contains(tc.name, "reaction"):
 			_, _ = w.Write([]byte(`{"id":9}`))
 		default:
-			_, _ = w.Write([]byte(`{"id":123,"html_url":"https://github.com/owner/repo/issues/1"}`))
+			_, _ = w.Write([]byte(`{"id":123,"number":1,"html_url":"https://github.com/owner/repo/issues/1"}`))
 		}
 	})}}
 	gql := &http.Client{Transport: recorderTransport{handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -213,7 +213,7 @@ func granularWireDeps(t *testing.T, current **granularIssueWireCase, fail bool) 
 			if tc.args["body"] != nil {
 				assert.Equal(t, tc.args["body"], input["body"])
 			}
-			_, _ = w.Write([]byte(`{"data":{"createIssue":{"issue":{"fullDatabaseId":"123","url":"https://github.com/owner/repo/issues/1"}}}}`))
+			_, _ = w.Write([]byte(`{"data":{"createIssue":{"issue":{"fullDatabaseId":"123","number":1,"url":"https://github.com/owner/repo/issues/1"}}}}`))
 		case strings.Contains(request.Query, "setIssueFieldValue("):
 			assert.Contains(t, r.Header.Get(headers.GraphQLFeaturesHeader), "update_issue_suggestions")
 			assert.JSONEq(t, `{"issueId":"I_1","issueFields":[{"fieldId":"IF_text","textValue":"Value","rationale":"Signal","confidence":"HIGH","suggest":true},{"fieldId":"IF_number","numberValue":0},{"fieldId":"IF_date","dateValue":"2026-10-02"},{"fieldId":"IF_select","singleSelectOptionId":"OPT_1"},{"fieldId":"IF_delete","delete":true}]}`, string(request.Variables["input"]))

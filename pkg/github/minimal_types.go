@@ -418,6 +418,10 @@ type MinimalWorkflowJobsResult struct {
 type MinimalResponse struct {
 	ID  string `json:"id"`
 	URL string `json:"url"`
+	// Number and HTMLURL are set for issues, pull requests and their comments
+	// (for a comment, Number is its issue or pull request).
+	Number  int    `json:"number,omitempty"`
+	HTMLURL string `json:"html_url,omitempty"`
 }
 
 // MinimalCollaborator is the trimmed output type for repository collaborators.
@@ -1947,6 +1951,8 @@ type MinimalPageInfo struct {
 
 // MinimalReviewComment is the trimmed output type for PR review comment objects.
 type MinimalReviewComment struct {
+	// ID is the numeric comment ID that add_reply_to_pull_request_comment takes as commentId.
+	ID                int64  `json:"id,omitempty"`
 	Body              string `json:"body,omitempty"`
 	Path              string `json:"path"`
 	Line              *int   `json:"line,omitempty"`
@@ -2285,6 +2291,7 @@ func convertToMinimalReviewThread(thread reviewThreadNode) MinimalReviewThread {
 
 func convertToMinimalReviewComment(c reviewCommentNode) MinimalReviewComment {
 	m := MinimalReviewComment{
+		ID:      parseFullDatabaseID(string(c.FullDatabaseID)),
 		Body:    sanitize.Content(string(c.Body)),
 		Path:    string(c.Path),
 		Author:  string(c.Author.Login),

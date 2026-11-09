@@ -87,8 +87,10 @@ func issueUpdateTool[In interface {
 			defer func() { _ = resp.Body.Close() }()
 
 			return granularIssueMinimalResult(&MinimalResponse{
-				ID:  fmt.Sprintf("%d", issue.GetID()),
-				URL: issue.GetHTMLURL(),
+				ID:      fmt.Sprintf("%d", issue.GetID()),
+				URL:     issue.GetHTMLURL(),
+				Number:  issue.GetNumber(),
+				HTMLURL: issue.GetHTMLURL(),
 			})
 		},
 		normalizer,
@@ -181,8 +183,10 @@ func GranularCreateIssue(t translations.TranslationHelperFunc) inventory.ServerT
 			defer func() { _ = resp.Body.Close() }()
 
 			return granularIssueMinimalResult(&MinimalResponse{
-				ID:  fmt.Sprintf("%d", issue.GetID()),
-				URL: issue.GetHTMLURL(),
+				ID:      fmt.Sprintf("%d", issue.GetID()),
+				URL:     issue.GetHTMLURL(),
+				Number:  issue.GetNumber(),
+				HTMLURL: issue.GetHTMLURL(),
 			})
 		},
 		granularIssueInputNormalizer(normalizeGranularCreateIssueArguments),
@@ -318,8 +322,10 @@ func GranularUpdateIssueAssignees(t translations.TranslationHelperFunc) inventor
 			defer func() { _ = resp.Body.Close() }()
 
 			return granularIssueMinimalResult(&MinimalResponse{
-				ID:  fmt.Sprintf("%d", issue.GetID()),
-				URL: issue.GetHTMLURL(),
+				ID:      fmt.Sprintf("%d", issue.GetID()),
+				URL:     issue.GetHTMLURL(),
+				Number:  issue.GetNumber(),
+				HTMLURL: issue.GetHTMLURL(),
 			})
 		},
 		granularIssueInputNormalizer(normalizeGranularUpdateIssueAssigneesArguments),
@@ -453,8 +459,10 @@ func GranularUpdateIssueLabels(t translations.TranslationHelperFunc) inventory.S
 			defer func() { _ = resp.Body.Close() }()
 
 			return granularIssueMinimalResult(&MinimalResponse{
-				ID:  fmt.Sprintf("%d", issue.GetID()),
-				URL: issue.GetHTMLURL(),
+				ID:      fmt.Sprintf("%d", issue.GetID()),
+				URL:     issue.GetHTMLURL(),
+				Number:  issue.GetNumber(),
+				HTMLURL: issue.GetHTMLURL(),
 			})
 		},
 		granularIssueInputNormalizer(normalizeGranularUpdateIssueLabelsArguments),
@@ -596,8 +604,10 @@ func GranularUpdateIssueType(t translations.TranslationHelperFunc) inventory.Ser
 			defer func() { _ = resp.Body.Close() }()
 
 			return granularIssueMinimalResult(&MinimalResponse{
-				ID:  fmt.Sprintf("%d", issue.GetID()),
-				URL: issue.GetHTMLURL(),
+				ID:      fmt.Sprintf("%d", issue.GetID()),
+				URL:     issue.GetHTMLURL(),
+				Number:  issue.GetNumber(),
+				HTMLURL: issue.GetHTMLURL(),
 			})
 		},
 		granularIssueInputNormalizer(normalizeGranularUpdateIssueTypeArguments),
@@ -741,8 +751,10 @@ func GranularUpdateIssueState(t translations.TranslationHelperFunc) inventory.Se
 			defer func() { _ = resp.Body.Close() }()
 
 			return granularIssueMinimalResult(&MinimalResponse{
-				ID:  fmt.Sprintf("%d", issue.GetID()),
-				URL: issue.GetHTMLURL(),
+				ID:      fmt.Sprintf("%d", issue.GetID()),
+				URL:     issue.GetHTMLURL(),
+				Number:  issue.GetNumber(),
+				HTMLURL: issue.GetHTMLURL(),
 			})
 		},
 		granularIssueInputNormalizer(normalizeGranularUpdateIssueStateArguments),
