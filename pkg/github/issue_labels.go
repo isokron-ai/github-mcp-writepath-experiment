@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 
 	ghErrors "github.com/github/github-mcp-server/v2/pkg/errors"
 	"github.com/github/github-mcp-server/v2/pkg/inventory"
@@ -67,10 +68,8 @@ func validateIssueLabelsChange(input IssueLabelsChangeInput) error {
 	if len(input.Labels) == 0 {
 		return fmt.Errorf("labels must contain at least one label")
 	}
-	for _, label := range input.Labels {
-		if label == "" {
-			return fmt.Errorf("labels must not contain empty names")
-		}
+	if slices.Contains(input.Labels, "") {
+		return fmt.Errorf("labels must not contain empty names")
 	}
 	return nil
 }

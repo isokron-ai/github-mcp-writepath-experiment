@@ -225,6 +225,8 @@ func AllTools(t translations.TranslationHelperFunc, opts ...ToolOption) []invent
 		// Repository tools
 		SearchRepositories(t),
 		GetFileContents(t),
+		ListRepositoryFiles(t),
+		GetFiles(t),
 		ListCommits(t),
 		SearchCode(t),
 		SearchCommits(t),
