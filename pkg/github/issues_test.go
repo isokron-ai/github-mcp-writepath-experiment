@@ -5238,6 +5238,51 @@ func Test_UpdateIssueClearsLabelsAndAssignees(t *testing.T) {
 	assert.Equal(t, updatedIssue.GetHTMLURL(), updateResp.URL)
 }
 
+func Test_UpdateIssueRejectsUpdateWithoutChanges(t *testing.T) {
+	serverTool := IssueWrite(translations.NullTranslationHelper)
+
+	// No REST or GraphQL endpoint is mocked: the update must fail before any request.
+	client := mustNewGHClient(t, MockHTTPClientWithHandlers(map[string]http.HandlerFunc{}))
+	gqlClient := githubv4.NewClient(githubv4mock.NewMockedHTTPClient())
+	deps := BaseDeps{
+		Client:    client,
+		GQLClient: gqlClient,
+	}
+	handler := serverTool.Handler(deps)
+
+	tests := []struct {
+		name string
+		args map[string]any
+	}{
+		{
+			name: "no fields",
+			args: map[string]any{},
+		},
+		{
+			name: "only parameters the tool does not know",
+			args: map[string]any{"status": "closed", "label": "bug"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			args := map[string]any{
+				"method":       "update",
+				"owner":        "owner",
+				"repo":         "repo",
+				"issue_number": float64(8),
+			}
+			maps.Copy(args, tc.args)
+			request := createMCPRequest(args)
+			result, err := handler(ContextWithDeps(context.Background(), deps), &request)
+
+			require.NoError(t, err)
+			require.True(t, result.IsError)
+			assert.Contains(t, getErrorResult(t, result).Text, "no changes requested")
+		})
+	}
+}
+
 func Test_ParseISOTimestamp(t *testing.T) {
 	tests := []struct {
 		name         string

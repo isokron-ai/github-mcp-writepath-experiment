@@ -1380,6 +1380,7 @@ func Test_CreateBranch(t *testing.T) {
 	assert.Contains(t, schema.Properties, "repo")
 	assert.Contains(t, schema.Properties, "branch")
 	assert.Contains(t, schema.Properties, "from_branch")
+	assert.Contains(t, schema.Properties, "from_sha")
 	assert.ElementsMatch(t, schema.Required, []string{"owner", "repo", "branch"})
 
 	// Setup mock repository for default branch test
@@ -1448,6 +1449,50 @@ func Test_CreateBranch(t *testing.T) {
 			},
 			expectError: false,
 			expectedRef: mockCreatedRef,
+		},
+		{
+			name: "successful branch creation from a commit SHA",
+			mockedClient: MockHTTPClientWithHandlers(map[string]http.HandlerFunc{
+				PostReposGitRefsByOwnerByRepo: expectRequestBody(t, map[string]any{
+					"ref": "refs/heads/new-feature",
+					"sha": "0123456789abcdef0123456789abcdef01234567",
+				}).andThen(
+					mockResponse(t, http.StatusCreated, mockCreatedRef),
+				),
+			}),
+			requestArgs: map[string]any{
+				"owner":    "owner",
+				"repo":     "repo",
+				"branch":   "new-feature",
+				"from_sha": "0123456789abcdef0123456789abcdef01234567",
+			},
+			expectError: false,
+			expectedRef: mockCreatedRef,
+		},
+		{
+			name:         "from_sha cannot be combined with from_branch",
+			mockedClient: MockHTTPClientWithHandlers(map[string]http.HandlerFunc{}),
+			requestArgs: map[string]any{
+				"owner":       "owner",
+				"repo":        "repo",
+				"branch":      "new-feature",
+				"from_branch": "main",
+				"from_sha":    "0123456789abcdef0123456789abcdef01234567",
+			},
+			expectError:    true,
+			expectedErrMsg: "from_sha cannot be combined with from_branch",
+		},
+		{
+			name:         "from_sha must be a full commit SHA",
+			mockedClient: MockHTTPClientWithHandlers(map[string]http.HandlerFunc{}),
+			requestArgs: map[string]any{
+				"owner":    "owner",
+				"repo":     "repo",
+				"branch":   "new-feature",
+				"from_sha": "abc123",
+			},
+			expectError:    true,
+			expectedErrMsg: "from_sha must be a full 40-character commit SHA",
 		},
 		{
 			name: "fail to get repository",
@@ -3002,6 +3047,7 @@ func Test_PushFiles(t *testing.T) {
 	assert.Contains(t, schema.Properties, "branch")
 	assert.Contains(t, schema.Properties, "files")
 	assert.Contains(t, schema.Properties, "message")
+	assert.Contains(t, schema.Properties, "create_branch")
 	assert.ElementsMatch(t, schema.Required, []string{"owner", "repo", "branch", "files", "message"})
 
 	// Setup mock objects
@@ -3197,15 +3243,10 @@ func Test_PushFiles(t *testing.T) {
 			expectedErrMsg: "each file must have content",
 		},
 		{
-			name: "fails to get branch reference",
+			name: "fails when the branch does not exist and create_branch is not set",
 			mockedClient: NewMockedHTTPClient(
 				WithRequestMatchHandler(
 					GetReposGitRefByOwnerByRepoByRef,
-					mockResponse(t, http.StatusNotFound, nil),
-				),
-				// Mock Repositories.Get to fail when trying to create branch from default
-				WithRequestMatchHandler(
-					GetReposByOwnerByRepo,
 					mockResponse(t, http.StatusNotFound, nil),
 				),
 			),
@@ -3222,7 +3263,35 @@ func Test_PushFiles(t *testing.T) {
 				"message": "Update file",
 			},
 			expectError:    false,
-			expectedErrMsg: "failed to create branch from default",
+			expectedErrMsg: `branch "non-existent-branch" does not exist; set create_branch to true to create it from the default branch`,
+		},
+		{
+			name: "fails to resolve the default branch for a new branch",
+			mockedClient: NewMockedHTTPClient(
+				WithRequestMatchHandler(
+					GetReposGitRefByOwnerByRepoByRef,
+					mockResponse(t, http.StatusNotFound, nil),
+				),
+				WithRequestMatchHandler(
+					GetReposByOwnerByRepo,
+					mockResponse(t, http.StatusNotFound, nil),
+				),
+			),
+			requestArgs: map[string]any{
+				"owner":         "owner",
+				"repo":          "repo",
+				"branch":        "non-existent-branch",
+				"create_branch": true,
+				"files": []any{
+					map[string]any{
+						"path":    "README.md",
+						"content": "# README",
+					},
+				},
+				"message": "Update file",
+			},
+			expectError:    false,
+			expectedErrMsg: "failed to resolve default branch",
 		},
 		{
 			name: "fails to get base commit",
@@ -3728,6 +3797,95 @@ func Test_PushFiles(t *testing.T) {
 			assert.Equal(t, *tc.expectedRef.Object.SHA, *returnedRef.Object.SHA)
 		})
 	}
+}
+
+func Test_PushFiles_CreateBranch(t *testing.T) {
+	serverTool := PushFiles(translations.NullTranslationHelper)
+
+	defaultRef := &github.Reference{
+		Ref:    new("refs/heads/main"),
+		Object: &github.GitObject{SHA: new("abc123")},
+	}
+	baseCommit := &github.Commit{
+		SHA:  new("abc123"),
+		Tree: &github.Tree{SHA: new("def456")},
+	}
+	newCommit := &github.Commit{SHA: new("jkl012")}
+	createdRef := &github.Reference{
+		Ref:    new("refs/heads/feature"),
+		Object: &github.GitObject{SHA: new("jkl012")},
+	}
+	args := map[string]any{
+		"owner":         "owner",
+		"repo":          "repo",
+		"branch":        "feature",
+		"create_branch": true,
+		"files": []any{
+			map[string]any{"path": "README.md", "content": "# README"},
+		},
+		"message": "Add README",
+	}
+
+	// getRef reports the feature branch as missing and resolves the default branch.
+	getRef := func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/git/ref/heads/main") {
+			mockResponse(t, http.StatusOK, defaultRef)(w, r)
+			return
+		}
+		mockResponse(t, http.StatusNotFound, nil)(w, r)
+	}
+
+	t.Run("creates the branch at the new commit", func(t *testing.T) {
+		var updatedExistingRef bool
+		client := mustNewGHClient(t, NewMockedHTTPClient(
+			WithRequestMatchHandler(GetReposGitRefByOwnerByRepoByRef, getRef),
+			WithRequestMatch(GetReposByOwnerByRepo, &github.Repository{DefaultBranch: new("main")}),
+			WithRequestMatch(GetReposGitCommitsByOwnerByRepoByCommitSHA, baseCommit),
+			WithRequestMatchHandler(PostReposGitTreesByOwnerByRepo, mockResponse(t, http.StatusCreated, &github.Tree{SHA: new("ghi789")})),
+			WithRequestMatchHandler(PostReposGitCommitsByOwnerByRepo, mockResponse(t, http.StatusCreated, newCommit)),
+			WithRequestMatchHandler(PostReposGitRefsByOwnerByRepo, expectRequestBody(t, map[string]any{
+				"ref": "refs/heads/feature",
+				"sha": "jkl012",
+			}).andThen(mockResponse(t, http.StatusCreated, createdRef))),
+			WithRequestMatchHandler(PatchReposGitRefsByOwnerByRepoByRef, func(w http.ResponseWriter, _ *http.Request) {
+				updatedExistingRef = true
+				w.WriteHeader(http.StatusInternalServerError)
+			}),
+		))
+		deps := BaseDeps{Client: client}
+		request := createMCPRequest(args)
+		result, err := serverTool.Handler(deps)(ContextWithDeps(context.Background(), deps), &request)
+		require.NoError(t, err)
+		require.False(t, result.IsError, getTextResult(t, result).Text)
+		assert.False(t, updatedExistingRef, "the default branch must not be moved")
+
+		var returnedRef github.Reference
+		require.NoError(t, json.Unmarshal([]byte(getTextResult(t, result).Text), &returnedRef))
+		assert.Equal(t, "refs/heads/feature", returnedRef.GetRef())
+		assert.Equal(t, "jkl012", returnedRef.GetObject().GetSHA())
+	})
+
+	t.Run("leaves no branch behind when the commit fails", func(t *testing.T) {
+		var createdBranch bool
+		client := mustNewGHClient(t, NewMockedHTTPClient(
+			WithRequestMatchHandler(GetReposGitRefByOwnerByRepoByRef, getRef),
+			WithRequestMatch(GetReposByOwnerByRepo, &github.Repository{DefaultBranch: new("main")}),
+			WithRequestMatch(GetReposGitCommitsByOwnerByRepoByCommitSHA, baseCommit),
+			WithRequestMatchHandler(PostReposGitTreesByOwnerByRepo, mockResponse(t, http.StatusCreated, &github.Tree{SHA: new("ghi789")})),
+			WithRequestMatchHandler(PostReposGitCommitsByOwnerByRepo, mockResponse(t, http.StatusInternalServerError, nil)),
+			WithRequestMatchHandler(PostReposGitRefsByOwnerByRepo, func(w http.ResponseWriter, _ *http.Request) {
+				createdBranch = true
+				w.WriteHeader(http.StatusCreated)
+			}),
+		))
+		deps := BaseDeps{Client: client}
+		request := createMCPRequest(args)
+		result, err := serverTool.Handler(deps)(ContextWithDeps(context.Background(), deps), &request)
+		require.NoError(t, err)
+		require.True(t, result.IsError)
+		assert.Contains(t, getErrorResult(t, result).Text, "failed to create commit")
+		assert.False(t, createdBranch, "no branch may be created before the commit exists")
+	})
 }
 
 func Test_DeleteRepository(t *testing.T) {
@@ -4299,7 +4457,8 @@ func Test_DeleteFile(t *testing.T) {
 	assert.Contains(t, schema.Properties, "path")
 	assert.Contains(t, schema.Properties, "message")
 	assert.Contains(t, schema.Properties, "branch")
-	// SHA is no longer required since we're using Git Data API
+	assert.Contains(t, schema.Properties, "sha")
+	// SHA is optional: it is only a precondition on the file being deleted
 	assert.ElementsMatch(t, schema.Required, []string{"owner", "repo", "path", "message", "branch"})
 
 	// Setup mock objects for Git Data API
@@ -4347,6 +4506,11 @@ func Test_DeleteFile(t *testing.T) {
 				WithRequestMatch(
 					GetReposGitCommitsByOwnerByRepoByCommitSHA,
 					mockCommit,
+				),
+				// Look up the path in the commit's tree
+				WithRequestMatchHandler(
+					GetReposGitTreesByOwnerByRepoByTree,
+					deleteFileTreeHandler(t),
 				),
 				// Create tree
 				WithRequestMatchHandler(
@@ -4463,6 +4627,97 @@ func Test_DeleteFile(t *testing.T) {
 			commitSHA, ok := commit["sha"].(string)
 			require.True(t, ok)
 			assert.Equal(t, tc.expectedCommitSHA, commitSHA)
+		})
+	}
+}
+
+// deleteFileTreeHandler serves a commit tree (def456) holding a docs
+// directory (tree111) that contains example.md (blob222).
+func deleteFileTreeHandler(t *testing.T) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/git/trees/def456"):
+			mockResponse(t, http.StatusOK, &github.Tree{
+				SHA: new("def456"),
+				Entries: []*github.TreeEntry{
+					{Path: new("docs"), Type: new("tree"), Mode: new("040000"), SHA: new("1111111111111111111111111111111111111111")},
+				},
+			})(w, r)
+		case strings.HasSuffix(r.URL.Path, "/git/trees/1111111111111111111111111111111111111111"):
+			mockResponse(t, http.StatusOK, &github.Tree{
+				SHA: new("1111111111111111111111111111111111111111"),
+				Entries: []*github.TreeEntry{
+					{Path: new("example.md"), Type: new("blob"), Mode: new("100644"), SHA: new("2222222222222222222222222222222222222222")},
+				},
+			})(w, r)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}
+}
+
+func Test_DeleteFile_Preconditions(t *testing.T) {
+	serverTool := DeleteFile(translations.NullTranslationHelper)
+
+	mockRef := &github.Reference{
+		Ref:    new("refs/heads/main"),
+		Object: &github.GitObject{SHA: new("abc123")},
+	}
+	mockCommit := &github.Commit{
+		SHA:  new("abc123"),
+		Tree: &github.Tree{SHA: new("def456")},
+	}
+
+	tests := []struct {
+		name           string
+		path           string
+		sha            string
+		expectedErrMsg string
+	}{
+		{
+			name:           "refuses a directory path",
+			path:           "docs",
+			expectedErrMsg: `path "docs" is a directory; delete_file only deletes a single file`,
+		},
+		{
+			name:           "refuses a missing file",
+			path:           "docs/missing.md",
+			expectedErrMsg: `file "docs/missing.md" does not exist on branch "main"`,
+		},
+		{
+			name:           "refuses when the file changed since it was read",
+			path:           "docs/example.md",
+			sha:            "3333333333333333333333333333333333333333",
+			expectedErrMsg: `file "docs/example.md" has changed on branch "main": its SHA is 2222222222222222222222222222222222222222, not 3333333333333333333333333333333333333333`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// No tree, commit or ref writes are mocked: reaching one fails the test.
+			client := mustNewGHClient(t, NewMockedHTTPClient(
+				WithRequestMatch(GetReposGitRefByOwnerByRepoByRef, mockRef),
+				WithRequestMatch(GetReposGitCommitsByOwnerByRepoByCommitSHA, mockCommit),
+				WithRequestMatchHandler(GetReposGitTreesByOwnerByRepoByTree, deleteFileTreeHandler(t)),
+			))
+			deps := BaseDeps{Client: client}
+			handler := serverTool.Handler(deps)
+
+			args := map[string]any{
+				"owner":   "owner",
+				"repo":    "repo",
+				"path":    tc.path,
+				"message": "Delete file",
+				"branch":  "main",
+			}
+			if tc.sha != "" {
+				args["sha"] = tc.sha
+			}
+			request := createMCPRequest(args)
+			result, err := handler(ContextWithDeps(context.Background(), deps), &request)
+			require.NoError(t, err)
+			require.True(t, result.IsError)
+			assert.Equal(t, tc.expectedErrMsg, getErrorResult(t, result).Text)
 		})
 	}
 }

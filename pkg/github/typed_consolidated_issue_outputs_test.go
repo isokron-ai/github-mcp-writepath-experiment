@@ -265,7 +265,7 @@ func TestTypedConsolidatedIssueOutputs(t *testing.T) {
 		{"issue_read", map[string]any{"method": "get_labels", "issue_number": 1}, `{"labels":[{"color":"red","description":"Bug","id":"L_1","name":"bug"}],"totalCount":1}`},
 		{"issue_read", map[string]any{"method": "get_labels", "issue_number": 2}, `{"labels":[],"totalCount":0}`},
 		{"issue_write", map[string]any{"method": "create", "title": "Subject"}, mutationText},
-		{"issue_write", map[string]any{"method": "update", "issue_number": "1.0"}, mutationText},
+		{"issue_write", map[string]any{"method": "update", "issue_number": "1.0", "title": "Updated"}, mutationText},
 		{"issue_write", map[string]any{"method": "update", "issue_number": "1", "state": "open"}, mutationText},
 		{"issue_write", map[string]any{"method": "update", "issue_number": 1, "state": "closed", "state_reason": "completed"}, mutationText},
 		{"issue_write", map[string]any{"method": "update", "issue_number": 1, "state": "closed", "state_reason": "not_planned"}, mutationText},
@@ -639,9 +639,7 @@ func TestTypedIssueWriteMutationOptionalityAndFields(t *testing.T) {
 				args map[string]any
 				body string
 			}{
-				{map[string]any{}, `{}`},
 				{map[string]any{"labels": []string{}, "assignees": []string{}, "type": nil, "milestone": "0"}, `{"labels":[],"assignees":[],"type":null}`},
-				{map[string]any{"labels": nil, "assignees": nil}, `{}`},
 				{map[string]any{"labels": []string{"bug"}, "assignees": []string{"octo"}, "type": "Bug", "milestone": "2.0"}, `{"labels":["bug"],"assignees":["octo"],"type":"Bug","milestone":2}`},
 				{map[string]any{"issue_fields": []any{
 					map[string]any{"field_name": "Number", "value": 0},
@@ -674,6 +672,15 @@ func TestTypedIssueWriteMutationOptionalityAndFields(t *testing.T) {
 			}, resultText)
 			assert.JSONEq(t, `{}`, requestBody)
 			assert.Equal(t, []string{"/repos/owner/repo/issues/1/issue-field-values/1"}, deleted)
+			// An update that would change nothing fails instead of reporting success.
+			for _, noChanges := range []map[string]any{{}, {"labels": nil, "assignees": nil}} {
+				args := map[string]any{"method": "update", "owner": "owner", "repo": "repo", "issue_number": "1"}
+				maps.Copy(args, noChanges)
+				result, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "issue_write", Arguments: args})
+				require.NoError(t, err)
+				require.True(t, result.IsError)
+				assert.Contains(t, getErrorResult(t, result).Text, "no changes requested")
+			}
 			for _, fields := range []any{
 				[]any{map[string]any{"field_name": "Missing", "value": "value"}},
 				[]any{map[string]any{"field_name": "Text", "field_option_name": "High"}},

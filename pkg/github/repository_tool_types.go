@@ -57,6 +57,7 @@ type DeleteFileInput struct {
 	Path    string `json:"path"`
 	Message string `json:"message"`
 	Branch  string `json:"branch"`
+	SHA     string `json:"sha,omitempty"`
 }
 
 type CreateBranchInput struct {
@@ -64,6 +65,7 @@ type CreateBranchInput struct {
 	Repo       string `json:"repo"`
 	Branch     string `json:"branch"`
 	FromBranch string `json:"from_branch,omitempty"`
+	FromSHA    string `json:"from_sha,omitempty"`
 }
 
 type PushFileInput struct {
@@ -72,11 +74,12 @@ type PushFileInput struct {
 }
 
 type PushFilesInput struct {
-	Owner   string          `json:"owner"`
-	Repo    string          `json:"repo"`
-	Branch  string          `json:"branch"`
-	Message string          `json:"message"`
-	Files   []PushFileInput `json:"files"`
+	Owner        string          `json:"owner"`
+	Repo         string          `json:"repo"`
+	Branch       string          `json:"branch"`
+	Message      string          `json:"message"`
+	Files        []PushFileInput `json:"files"`
+	CreateBranch bool            `json:"create_branch,omitempty"`
 }
 
 type RepositoryTagInput struct {

@@ -3327,6 +3327,12 @@ func updateIssue(ctx context.Context, client *github.Client, gqlClient *githubv4
 		updateOptions.IssueTypeProvided = updateOptions.IssueTypeProvided || opt.IssueTypeProvided
 	}
 
+	if title == "" && body == "" && !updateOptions.LabelsProvided && !updateOptions.AssigneesProvided &&
+		milestoneNum == 0 && issueType == "" && !updateOptions.IssueTypeProvided &&
+		len(issueFieldValues) == 0 && len(fieldIDsToDelete) == 0 && state == "" && stateReason == "" {
+		return utils.NewToolResultError("no changes requested: update needs at least one of title, body, labels, assignees, milestone, type, state, state_reason or issue_fields"), nil, nil
+	}
+
 	// Create the issue request with only provided fields
 	issueRequest := github.UpdateIssueRequest{}
 

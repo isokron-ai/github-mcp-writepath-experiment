@@ -1365,6 +1365,10 @@ func DeleteFile(t translations.TranslationHelperFunc) inventory.ServerTool {
 						Type:        "string",
 						Description: "Branch to delete the file from",
 					},
+					"sha": {
+						Type:        "string",
+						Description: "Blob SHA of the file as last read. If provided, the delete fails when the file on the branch has a different SHA",
+					},
 				},
 				Required: []string{"owner", "repo", "path", "message", "branch"},
 			},
@@ -1425,6 +1429,25 @@ func DeleteFile(t translations.TranslationHelperFunc) inventory.ServerTool {
 					return nil, nil, fmt.Errorf("failed to read response body: %w", err)
 				}
 				return ghErrors.NewGitHubAPIStatusErrorResponse(ctx, "failed to get commit", resp, body), nil, nil
+			}
+
+			// A tree entry with a nil SHA removes whatever is at the path, so a
+			// directory path would delete the whole directory. Check first.
+			entry, entryResp, err := getTreeEntry(ctx, client, owner, repo, baseCommit.GetTree().GetSHA(), path)
+			if err != nil {
+				if entryResp != nil {
+					return ghErrors.NewGitHubAPIErrorResponse(ctx, "failed to look up file", entryResp, err), nil, nil
+				}
+				return utils.NewToolResultError(fmt.Sprintf("failed to look up file: %s", err)), nil, nil
+			}
+			if entry == nil {
+				return utils.NewToolResultError(fmt.Sprintf("file %q does not exist on branch %q", path, branch)), nil, nil
+			}
+			if entry.GetType() == "tree" {
+				return utils.NewToolResultError(fmt.Sprintf("path %q is a directory; delete_file only deletes a single file", path)), nil, nil
+			}
+			if input.SHA != "" && !strings.EqualFold(input.SHA, entry.GetSHA()) {
+				return utils.NewToolResultError(fmt.Sprintf("file %q has changed on branch %q: its SHA is %s, not %s", path, branch, entry.GetSHA(), input.SHA)), nil, nil
 			}
 
 			// Create a tree entry for the file deletion by setting SHA to nil
@@ -1555,6 +1578,10 @@ func CreateBranch(t translations.TranslationHelperFunc) inventory.ServerTool {
 						Type:        "string",
 						Description: "Source branch (defaults to repo default)",
 					},
+					"from_sha": {
+						Type:        "string",
+						Description: "Full 40-character commit SHA to start the branch from. Cannot be combined with from_branch",
+					},
 				},
 				Required: []string{"owner", "repo", "branch"},
 			},
@@ -1574,45 +1601,52 @@ func CreateBranch(t translations.TranslationHelperFunc) inventory.ServerTool {
 				return utils.NewToolResultError("missing required parameter: branch"), nil, nil
 			}
 			fromBranch := input.FromBranch
+			fromSHA := input.FromSHA
+			if fromSHA != "" && fromBranch != "" {
+				return utils.NewToolResultError("from_sha cannot be combined with from_branch"), nil, nil
+			}
+			if fromSHA != "" && !looksLikeSHA(fromSHA) {
+				return utils.NewToolResultError("from_sha must be a full 40-character commit SHA"), nil, nil
+			}
 
 			client, err := deps.GetClient(ctx)
 			if err != nil {
 				return nil, nil, fmt.Errorf("failed to get GitHub client: %w", err)
 			}
 
-			// Get the source branch SHA
-			var ref *github.Reference
+			if fromSHA == "" {
+				if fromBranch == "" {
+					// Get default branch if from_branch not specified
+					repository, resp, err := client.Repositories.Get(ctx, owner, repo)
+					if err != nil {
+						return ghErrors.NewGitHubAPIErrorResponse(ctx,
+							"failed to get repository",
+							resp,
+							err,
+						), nil, nil
+					}
+					defer func() { _ = resp.Body.Close() }()
 
-			if fromBranch == "" {
-				// Get default branch if from_branch not specified
-				repository, resp, err := client.Repositories.Get(ctx, owner, repo)
+					fromBranch = *repository.DefaultBranch
+				}
+
+				// Get SHA of source branch
+				ref, resp, err := client.Git.GetRef(ctx, owner, repo, "refs/heads/"+fromBranch)
 				if err != nil {
 					return ghErrors.NewGitHubAPIErrorResponse(ctx,
-						"failed to get repository",
+						"failed to get reference",
 						resp,
 						err,
 					), nil, nil
 				}
 				defer func() { _ = resp.Body.Close() }()
-
-				fromBranch = *repository.DefaultBranch
+				fromSHA = *ref.Object.SHA
 			}
-
-			// Get SHA of source branch
-			ref, resp, err := client.Git.GetRef(ctx, owner, repo, "refs/heads/"+fromBranch)
-			if err != nil {
-				return ghErrors.NewGitHubAPIErrorResponse(ctx,
-					"failed to get reference",
-					resp,
-					err,
-				), nil, nil
-			}
-			defer func() { _ = resp.Body.Close() }()
 
 			// Create new branch
 			newRef := github.CreateRef{
 				Ref: "refs/heads/" + branch,
-				SHA: *ref.Object.SHA,
+				SHA: fromSHA,
 			}
 
 			createdRef, resp, err := client.Git.CreateRef(ctx, owner, repo, newRef)
@@ -1683,6 +1717,10 @@ func PushFiles(t translations.TranslationHelperFunc) inventory.ServerTool {
 					"message": {
 						Type:        "string",
 						Description: "Commit message",
+					},
+					"create_branch": {
+						Type:        "boolean",
+						Description: "Create the branch from the default branch if it does not exist. When false (the default), pushing to a missing branch fails",
 					},
 				},
 				Required: []string{"owner", "repo", "branch", "files", "message"},
@@ -1764,12 +1802,19 @@ func PushFiles(t translations.TranslationHelperFunc) inventory.ServerTool {
 				defer func() { _ = resp.Body.Close() }()
 			}
 
+			if branchNotFound && !input.CreateBranch {
+				return utils.NewToolResultError(fmt.Sprintf("branch %q does not exist; set create_branch to true to create it from the default branch", branch)), nil, nil
+			}
+
+			// A new branch is created only after its commit exists, so a
+			// failure part way through does not leave an empty branch behind.
+			createBranch := branchNotFound
 			var baseCommit *github.Commit
 			if !repositoryIsEmpty {
 				if branchNotFound {
-					ref, err = createReferenceFromDefaultBranch(ctx, client, owner, repo, branch)
+					ref, err = resolveDefaultBranch(ctx, client, owner, repo)
 					if err != nil {
-						return utils.NewToolResultError(fmt.Sprintf("failed to create branch from default: %v", err)), nil, nil
+						return utils.NewToolResultError(fmt.Sprintf("failed to resolve default branch: %v", err)), nil, nil
 					}
 				}
 
@@ -1786,20 +1831,23 @@ func PushFiles(t translations.TranslationHelperFunc) inventory.ServerTool {
 					defer func() { _ = resp.Body.Close() }()
 				}
 			} else {
+				repository, repoResp, err := client.Repositories.Get(ctx, owner, repo)
+				if err != nil {
+					return ghErrors.NewGitHubAPIErrorResponse(ctx, "failed to get repository", repoResp, err), nil, nil
+				}
+				if repoResp != nil && repoResp.Body != nil {
+					_ = repoResp.Body.Close()
+				}
+				createBranch = branch != repository.GetDefaultBranch()
+				if createBranch && !input.CreateBranch {
+					return utils.NewToolResultError(fmt.Sprintf("branch %q does not exist; set create_branch to true to create it from the default branch", branch)), nil, nil
+				}
+
 				var base *github.Commit
 				// Repository is empty, need to initialize it first
 				ref, base, err = initializeRepository(ctx, client, owner, repo)
 				if err != nil {
 					return utils.NewToolResultError(fmt.Sprintf("failed to initialize repository: %v", err)), nil, nil
-				}
-
-				defaultBranch := strings.TrimPrefix(*ref.Ref, "refs/heads/")
-				if branch != defaultBranch {
-					// Create the requested branch from the default branch
-					ref, err = createReferenceFromDefaultBranch(ctx, client, owner, repo, branch)
-					if err != nil {
-						return utils.NewToolResultError(fmt.Sprintf("failed to create branch from default: %v", err)), nil, nil
-					}
 				}
 
 				baseCommit = base
@@ -1836,18 +1884,32 @@ func PushFiles(t translations.TranslationHelperFunc) inventory.ServerTool {
 				defer func() { _ = resp.Body.Close() }()
 			}
 
-			// Update the reference to point to the new commit
-			ref.Object.SHA = newCommit.SHA
-			updatedRef, resp, err := client.Git.UpdateRef(ctx, owner, repo, *ref.Ref, github.UpdateRef{
-				SHA:   *newCommit.SHA,
-				Force: new(false),
-			})
-			if err != nil {
-				return ghErrors.NewGitHubAPIErrorResponse(ctx,
-					"failed to update reference",
-					resp,
-					err,
-				), nil, nil
+			var updatedRef *github.Reference
+			if createBranch {
+				updatedRef, resp, err = client.Git.CreateRef(ctx, owner, repo, github.CreateRef{
+					Ref: "refs/heads/" + branch,
+					SHA: *newCommit.SHA,
+				})
+				if err != nil {
+					return ghErrors.NewGitHubAPIErrorResponse(ctx,
+						"failed to create branch",
+						resp,
+						err,
+					), nil, nil
+				}
+			} else {
+				// Update the reference to point to the new commit
+				updatedRef, resp, err = client.Git.UpdateRef(ctx, owner, repo, *ref.Ref, github.UpdateRef{
+					SHA:   *newCommit.SHA,
+					Force: new(false),
+				})
+				if err != nil {
+					return ghErrors.NewGitHubAPIErrorResponse(ctx,
+						"failed to update reference",
+						resp,
+						err,
+					), nil, nil
+				}
 			}
 			defer func() { _ = resp.Body.Close() }()
 

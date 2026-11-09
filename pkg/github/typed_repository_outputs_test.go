@@ -161,6 +161,8 @@ func typedRepositoryDeps(t *testing.T) BaseDeps {
 		},
 		"GET /repos/{owner}/{repo}/git/trees/{tree_sha}": mockResponse(t, http.StatusOK, &github.Tree{Entries: []*github.TreeEntry{{
 			Path: new("nested/missing"), Type: new("blob"),
+		}, {
+			Path: new("file"), Type: new("blob"), Mode: new("100644"), SHA: new(strings.Repeat("b", 40)),
 		}}}),
 		"POST /repos/{owner}/{repo}/forks": func(w http.ResponseWriter, r *http.Request) {
 			var body github.RepositoryCreateForkOptions

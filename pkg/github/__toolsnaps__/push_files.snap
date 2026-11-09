@@ -23,6 +23,10 @@
         "description": "Branch to push to",
         "type": "string"
       },
+      "create_branch": {
+        "description": "Create the branch from the default branch if it does not exist. When false (the default), pushing to a missing branch fails",
+        "type": "boolean"
+      },
       "files": {
         "description": "Array of file objects to push, each object with path (string) and content (string)",
         "items": {

@@ -41,6 +41,10 @@
         "description": "Repository name",
         "type": "string",
         "x-mcp-header": "repo"
+      },
+      "sha": {
+        "description": "Blob SHA of the file as last read. If provided, the delete fails when the file on the branch has a different SHA",
+        "type": "string"
       }
     },
     "required": [

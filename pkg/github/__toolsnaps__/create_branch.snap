@@ -27,6 +27,10 @@
         "description": "Source branch (defaults to repo default)",
         "type": "string"
       },
+      "from_sha": {
+        "description": "Full 40-character commit SHA to start the branch from. Cannot be combined with from_branch",
+        "type": "string"
+      },
       "owner": {
         "description": "Repository owner",
         "type": "string",
