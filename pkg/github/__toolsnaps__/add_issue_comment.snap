@@ -67,6 +67,10 @@
           "id": {
             "description": "The ID of the created comment or reaction.",
             "type": "string"
+          },
+          "number": {
+            "description": "The number of the issue or pull request the comment is on.",
+            "type": "integer"
           }
         },
         "required": [
@@ -101,6 +105,10 @@
               "id": {
                 "description": "The ID of the created comment or reaction.",
                 "type": "string"
+              },
+              "number": {
+                "description": "The number of the issue or pull request the comment is on.",
+                "type": "integer"
               }
             },
             "required": [

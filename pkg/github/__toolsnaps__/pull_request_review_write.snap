@@ -4,12 +4,62 @@
     "readOnlyHint": false,
     "title": "Write operations (create, submit, delete) on pull request reviews"
   },
-  "description": "Create and/or submit, delete review of a pull request.\n\nAvailable methods:\n- create: Create a new review of a pull request. If \"event\" parameter is provided, the review is submitted. If \"event\" is omitted, a pending review is created.\n- submit_pending: Submit an existing pending review of a pull request. This requires that a pending review exists for the current user on the specified pull request. The \"body\" and \"event\" parameters are used when submitting the review.\n- delete_pending: Delete an existing pending review of a pull request. This requires that a pending review exists for the current user on the specified pull request.\n- resolve_thread: Resolve a review thread. Requires only \"threadId\" parameter with the thread's node ID (e.g., PRRT_kwDOxxx). The owner, repo, and pullNumber parameters are not used for this method. Resolving an already-resolved thread is a no-op.\n- unresolve_thread: Unresolve a previously resolved review thread. Requires only \"threadId\" parameter. The owner, repo, and pullNumber parameters are not used for this method. Unresolving an already-unresolved thread is a no-op.\n",
+  "description": "Create and/or submit, delete review of a pull request.\n\nAvailable methods:\n- create: Create a new review of a pull request. If \"event\" parameter is provided, the review is submitted. If \"event\" is omitted, a pending review is created. Inline comments passed in \"comments\" are added to the review, so body, event and comments take a single call.\n- submit_pending: Submit an existing pending review of a pull request. This requires that a pending review exists for the current user on the specified pull request. The \"body\" and \"event\" parameters are used when submitting the review.\n- delete_pending: Delete an existing pending review of a pull request. This requires that a pending review exists for the current user on the specified pull request.\n- resolve_thread: Resolve a review thread. Requires only \"threadId\" parameter with the thread's node ID (e.g., PRRT_kwDOxxx). The owner, repo, and pullNumber parameters are not used for this method. Resolving an already-resolved thread is a no-op.\n- unresolve_thread: Unresolve a previously resolved review thread. Requires only \"threadId\" parameter. The owner, repo, and pullNumber parameters are not used for this method. Unresolving an already-unresolved thread is a no-op.\n",
   "inputSchema": {
     "properties": {
       "body": {
         "description": "Review comment text",
         "type": "string"
+      },
+      "comments": {
+        "description": "Inline comments to add with the review. Only used by the create method.",
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "body": {
+              "description": "Comment text",
+              "minLength": 1,
+              "type": "string"
+            },
+            "line": {
+              "description": "Line number in the file to comment on; the last line for a multi-line comment",
+              "minimum": 1,
+              "type": "integer"
+            },
+            "path": {
+              "description": "File path relative to the repository root",
+              "type": "string"
+            },
+            "side": {
+              "description": "Diff side of the line: RIGHT (the new version, default) or LEFT (the old version)",
+              "enum": [
+                "LEFT",
+                "RIGHT"
+              ],
+              "type": "string"
+            },
+            "start_line": {
+              "description": "First line of a multi-line comment",
+              "minimum": 1,
+              "type": "integer"
+            },
+            "start_side": {
+              "description": "Diff side of start_line (defaults to side)",
+              "enum": [
+                "LEFT",
+                "RIGHT"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "line",
+            "body"
+          ],
+          "type": "object"
+        },
+        "type": "array"
       },
       "commitID": {
         "description": "SHA of commit to review",

@@ -996,6 +996,13 @@ For negotiated supported protocol versions `2026-07-28` or newer, the consolidat
   - `reaction`: Emoji reaction to add. Required unless body is provided. (string, optional)
   - `repo`: Repository name (string, required)
 
+- **add_issue_labels** - Add labels to issue or pull request
+  - **OAuth Challenge Scopes**: `repo`
+  - `issue_number`: Issue or pull request number (number, required)
+  - `labels`: Label names to add (string[], required)
+  - `owner`: Repository owner (string, required)
+  - `repo`: Repository name (string, required)
+
 - **get_label** - Get a specific label from a repository
   - **OAuth Challenge Scopes**: `repo`
   - `name`: Label name. (string, required)
@@ -1066,6 +1073,13 @@ For negotiated supported protocol versions `2026-07-28` or newer, the consolidat
   - `repo`: Repository name (string, required)
   - `since`: Filter by date (ISO 8601 timestamp) (string, optional)
   - `state`: Filter by state, by default both open and closed issues are returned when not provided (string, optional)
+
+- **remove_issue_labels** - Remove labels from issue or pull request
+  - **OAuth Challenge Scopes**: `repo`
+  - `issue_number`: Issue or pull request number (number, required)
+  - `labels`: Label names to remove (string[], required)
+  - `owner`: Repository owner (string, required)
+  - `repo`: Repository name (string, required)
 
 - **search_issues** - Search issues
   - **OAuth Challenge Scopes**: `repo`
@@ -1270,7 +1284,7 @@ For negotiated supported protocol versions `2026-07-28` or newer, the consolidat
 - **add_reply_to_pull_request_comment** - Add reply to pull request comment
   - **OAuth Challenge Scopes**: `repo`
   - `body`: The text of the reply. Required unless reaction is provided. (string, optional)
-  - `commentId`: The numeric ID of the pull request review comment to reply or react to. Use the number from a #discussion_r... anchor, not the GraphQL thread node ID (PRRT_...). (number, required)
+  - `commentId`: The numeric ID of the pull request review comment to reply or react to: the comment's id from pull_request_read get_review_comments, or the number from a #discussion_r... anchor. Not the GraphQL thread node ID (PRRT_...). (number, required)
   - `owner`: Repository owner (string, required)
   - `pullNumber`: Pull request number. Required when body is provided. (number, optional)
   - `reaction`: Emoji reaction to add. Required unless body is provided. (string, optional)
@@ -1336,6 +1350,7 @@ For negotiated supported protocol versions `2026-07-28` or newer, the consolidat
 - **pull_request_review_write** - Write operations (create, submit, delete) on pull request reviews
   - **OAuth Challenge Scopes**: `repo`
   - `body`: Review comment text (string, optional)
+  - `comments`: Inline comments to add with the review. Only used by the create method. (object[], optional)
   - `commitID`: SHA of commit to review (string, optional)
   - `event`: Review action to perform. (string, optional)
   - `method`: The write operation to perform on pull request review. (string, required)
@@ -1386,6 +1401,7 @@ For negotiated supported protocol versions `2026-07-28` or newer, the consolidat
   - **OAuth Challenge Scopes**: `repo`
   - `branch`: Name for new branch (string, required)
   - `from_branch`: Source branch (defaults to repo default) (string, optional)
+  - `from_sha`: Full 40-character commit SHA to start the branch from. Cannot be combined with from_branch (string, optional)
   - `owner`: Repository owner (string, required)
   - `repo`: Repository name (string, required)
 
@@ -1415,6 +1431,7 @@ For negotiated supported protocol versions `2026-07-28` or newer, the consolidat
   - `owner`: Repository owner (username or organization) (string, required)
   - `path`: Path to the file to delete (string, required)
   - `repo`: Repository name (string, required)
+  - `sha`: Blob SHA of the file as last read. If provided, the delete fails when the file on the branch has a different SHA (string, optional)
 
 - **delete_repository** - Delete repository
   - **OAuth Challenge Scopes**: `delete_repo`, `repo`
@@ -1444,6 +1461,14 @@ For negotiated supported protocol versions `2026-07-28` or newer, the consolidat
   - `ref`: Accepts optional git refs such as `refs/tags/{tag}`, `refs/heads/{branch}` or `refs/pull/{pr_number}/head` (string, optional)
   - `repo`: Repository name (string, required)
   - `sha`: Accepts optional commit SHA. If specified, it will be used instead of ref (string, optional)
+
+- **get_files** - Get several files
+  - **OAuth Challenge Scopes**: `repo`
+  - `max_bytes`: Maximum total bytes of content to return (default 200000, at most 1000000) (integer, optional)
+  - `owner`: Repository owner (string, required)
+  - `paths`: File paths relative to the repository root (string[], required)
+  - `ref`: Branch, tag or commit SHA (defaults to the default branch) (string, optional)
+  - `repo`: Repository name (string, required)
 
 - **get_latest_release** - Get latest release
   - **OAuth Challenge Scopes**: `repo`
@@ -1498,6 +1523,14 @@ For negotiated supported protocol versions `2026-07-28` or newer, the consolidat
   - `perPage`: Results per page for pagination (default 30, min 1, max 100) (number, optional)
   - `repo`: Repository name (string, required)
 
+- **list_repository_files** - List repository files
+  - **OAuth Challenge Scopes**: `repo`
+  - `max_entries`: Maximum number of files to return (default 1000, at most 5000) (integer, optional)
+  - `owner`: Repository owner (string, required)
+  - `path`: Only list files under this directory (string, optional)
+  - `ref`: Branch, tag or commit SHA (defaults to the default branch) (string, optional)
+  - `repo`: Repository name (string, required)
+
 - **list_tags** - List tags
   - **OAuth Challenge Scopes**: `repo`
   - `owner`: Repository owner (string, required)
@@ -1508,6 +1541,7 @@ For negotiated supported protocol versions `2026-07-28` or newer, the consolidat
 - **push_files** - Push files to repository
   - **OAuth Challenge Scopes**: `repo`, `workflow`
   - `branch`: Branch to push to (string, required)
+  - `create_branch`: Create the branch from the default branch if it does not exist. When false (the default), pushing to a missing branch fails (boolean, optional)
   - `files`: Array of file objects to push, each object with path (string) and content (string) (object[], required)
   - `message`: Commit message (string, required)
   - `owner`: Repository owner (string, required)

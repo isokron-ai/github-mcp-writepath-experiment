@@ -1,0 +1,96 @@
+{
+  "annotations": {
+    "idempotentHint": false,
+    "readOnlyHint": true,
+    "title": "Get several files"
+  },
+  "description": "Read up to 25 text files from a repository in one call. Files come back in the order requested; a file that cannot be read gets an error instead of content, and content stops once max_bytes have been returned in total.",
+  "inputSchema": {
+    "properties": {
+      "max_bytes": {
+        "description": "Maximum total bytes of content to return (default 200000, at most 1000000)",
+        "maximum": 1000000,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "owner": {
+        "description": "Repository owner",
+        "type": "string"
+      },
+      "paths": {
+        "description": "File paths relative to the repository root",
+        "items": {
+          "type": "string"
+        },
+        "maxItems": 25,
+        "minItems": 1,
+        "type": "array"
+      },
+      "ref": {
+        "description": "Branch, tag or commit SHA (defaults to the default branch)",
+        "type": "string"
+      },
+      "repo": {
+        "description": "Repository name",
+        "type": "string"
+      }
+    },
+    "required": [
+      "owner",
+      "repo",
+      "paths"
+    ],
+    "type": "object"
+  },
+  "name": "get_files",
+  "outputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "bytes": {
+        "type": "integer"
+      },
+      "files": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "content": {
+              "type": "string"
+            },
+            "error": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "sha": {
+              "type": "string"
+            },
+            "size": {
+              "type": "integer"
+            },
+            "truncated": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        },
+        "type": [
+          "null",
+          "array"
+        ]
+      },
+      "truncated": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "files",
+      "bytes",
+      "truncated"
+    ],
+    "type": "object"
+  }
+}

@@ -472,6 +472,7 @@ as output formatting) won't appear here.
 - **pull_request_review_write** - Write operations (create, submit, delete) on pull request reviews
   - **OAuth Challenge Scopes**: `repo`
   - `body`: Review comment text (string, optional)
+  - `comments`: Inline comments to add with the review. Only used by the create method. (object[], optional)
   - `commitID`: SHA of commit to review (string, optional)
   - `event`: Review action to perform. (string, optional)
   - `method`: The write operation to perform on pull request review. (string, required)

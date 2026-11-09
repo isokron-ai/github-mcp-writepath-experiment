@@ -1,0 +1,74 @@
+{
+  "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "readOnlyHint": false,
+    "title": "Add labels to issue or pull request"
+  },
+  "description": "Add labels to an issue or pull request. Labels already on it are kept, so there is no need to read them first. Returns the labels after the change.",
+  "inputSchema": {
+    "properties": {
+      "issue_number": {
+        "description": "Issue or pull request number",
+        "minimum": 1,
+        "type": "number"
+      },
+      "labels": {
+        "description": "Label names to add",
+        "items": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "minItems": 1,
+        "type": "array"
+      },
+      "owner": {
+        "description": "Repository owner",
+        "type": "string"
+      },
+      "repo": {
+        "description": "Repository name",
+        "type": "string"
+      }
+    },
+    "required": [
+      "owner",
+      "repo",
+      "issue_number",
+      "labels"
+    ],
+    "type": "object"
+  },
+  "name": "add_issue_labels",
+  "outputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "labels": {
+        "items": {
+          "type": "string"
+        },
+        "type": [
+          "null",
+          "array"
+        ]
+      },
+      "not_present": {
+        "items": {
+          "type": "string"
+        },
+        "type": [
+          "null",
+          "array"
+        ]
+      },
+      "number": {
+        "type": "integer"
+      }
+    },
+    "required": [
+      "number",
+      "labels"
+    ],
+    "type": "object"
+  }
+}

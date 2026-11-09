@@ -481,6 +481,9 @@
                         "description": "Browser URL.",
                         "type": "string"
                       },
+                      "id": {
+                        "type": "integer"
+                      },
                       "line": {
                         "description": "One-based diff line number.",
                         "type": [

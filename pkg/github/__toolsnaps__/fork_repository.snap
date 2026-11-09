@@ -49,8 +49,14 @@
       {
         "additionalProperties": false,
         "properties": {
+          "html_url": {
+            "type": "string"
+          },
           "id": {
             "type": "string"
+          },
+          "number": {
+            "type": "integer"
           },
           "url": {
             "type": "string"

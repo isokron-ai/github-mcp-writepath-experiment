@@ -1,0 +1,74 @@
+{
+  "annotations": {
+    "destructiveHint": true,
+    "idempotentHint": true,
+    "readOnlyHint": false,
+    "title": "Remove labels from issue or pull request"
+  },
+  "description": "Remove labels from an issue or pull request. Its other labels are kept. Returns the labels after the change; requested labels that were not on it are listed in not_present.",
+  "inputSchema": {
+    "properties": {
+      "issue_number": {
+        "description": "Issue or pull request number",
+        "minimum": 1,
+        "type": "number"
+      },
+      "labels": {
+        "description": "Label names to remove",
+        "items": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "minItems": 1,
+        "type": "array"
+      },
+      "owner": {
+        "description": "Repository owner",
+        "type": "string"
+      },
+      "repo": {
+        "description": "Repository name",
+        "type": "string"
+      }
+    },
+    "required": [
+      "owner",
+      "repo",
+      "issue_number",
+      "labels"
+    ],
+    "type": "object"
+  },
+  "name": "remove_issue_labels",
+  "outputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "labels": {
+        "items": {
+          "type": "string"
+        },
+        "type": [
+          "null",
+          "array"
+        ]
+      },
+      "not_present": {
+        "items": {
+          "type": "string"
+        },
+        "type": [
+          "null",
+          "array"
+        ]
+      },
+      "number": {
+        "type": "integer"
+      }
+    },
+    "required": [
+      "number",
+      "labels"
+    ],
+    "type": "object"
+  }
+}

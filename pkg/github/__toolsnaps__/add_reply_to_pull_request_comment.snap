@@ -12,7 +12,7 @@
         "type": "string"
       },
       "commentId": {
-        "description": "The numeric ID of the pull request review comment to reply or react to. Use the number from a #discussion_r... anchor, not the GraphQL thread node ID (PRRT_...).",
+        "description": "The numeric ID of the pull request review comment to reply or react to: the comment's id from pull_request_read get_review_comments, or the number from a #discussion_r... anchor. Not the GraphQL thread node ID (PRRT_...).",
         "minimum": 1,
         "type": "number"
       },
@@ -62,6 +62,9 @@
           },
           "id": {
             "type": "string"
+          },
+          "number": {
+            "type": "integer"
           }
         },
         "required": [
@@ -81,6 +84,9 @@
               },
               "id": {
                 "type": "string"
+              },
+              "number": {
+                "type": "integer"
               }
             },
             "required": [
@@ -97,6 +103,9 @@
               },
               "id": {
                 "type": "string"
+              },
+              "number": {
+                "type": "integer"
               }
             },
             "required": [

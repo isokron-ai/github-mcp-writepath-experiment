@@ -63,9 +63,15 @@
   "outputSchema": {
     "additionalProperties": false,
     "properties": {
+      "html_url": {
+        "type": "string"
+      },
       "id": {
         "description": "Reaction ID",
         "type": "string"
+      },
+      "number": {
+        "type": "integer"
       },
       "url": {
         "description": "Reaction URL",
