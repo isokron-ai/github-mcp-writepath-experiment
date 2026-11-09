@@ -1,0 +1,797 @@
+From a0cd07acdf2ba941834c842752da036e6e57b41b Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 9 Nov 2026 12:50:50 -0700
+Subject: [PATCH 1/8] fix(issues): stop issue_write field updates reverting
+ concurrent changes
+
+updateIssue read every issue field value over GraphQL, merged in the
+requested change and sent the whole set in the issue PATCH. The PATCH
+replaces the full set and nothing checked the snapshot was current, so
+two overlapping updates to different fields reverted each other: the
+call that finished last wrote back the other field's old value.
+Deleting one of several fields had the same problem.
+
+Send only the requested values to the additive
+POST /repos/{owner}/{repo}/issues/{issue_number}/issue-field-values
+endpoint after the PATCH, and always clear fields through the existing
+per-field DELETE, treating 404 as already cleared so a repeated delete
+stays a no-op. The PATCH no longer carries issue_field_values, which
+also drops the extra GraphQL read and its 25-value cap on this path.
+Updates without issue fields are unchanged.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QV62ZkZa646Swi2zdbdnXN
+---
+ pkg/github/helper_test.go                     |   1 +
+ pkg/github/issues.go                          | 163 ++-------
+ pkg/github/issues_delete_test.go              | 336 ++++++------------
+ pkg/github/issues_test.go                     |  26 +-
+ .../typed_consolidated_issue_outputs_test.go  |   7 +-
+ 5 files changed, 141 insertions(+), 392 deletions(-)
+
+diff --git a/pkg/github/helper_test.go b/pkg/github/helper_test.go
+index 80a2e52..a64fdcb 100644
+--- a/pkg/github/helper_test.go
++++ b/pkg/github/helper_test.go
+@@ -74,6 +74,7 @@ const (
+ 	PatchReposIssuesSubIssuesPriorityByOwnerByRepoByIssueNumber = "PATCH /repos/{owner}/{repo}/issues/{issue_number}/sub_issues/priority"
+ 	PostReposIssuesCommentsReactionsByOwnerByRepoByCommentID    = "POST /repos/{owner}/{repo}/issues/comments/{comment_id}/reactions"
+ 	DeleteReposIssuesCommentsReactionsByOwnerByRepoByCommentID  = "DELETE /repos/{owner}/{repo}/issues/comments/{comment_id}/reactions/{reaction_id}"
++	PostReposIssuesIssueFieldValuesByOwnerByRepoByIssueNumber   = "POST /repos/{owner}/{repo}/issues/{issue_number}/issue-field-values"
+ 	DeleteReposIssuesIssueFieldValueByOwnerByRepoByIssueNumber  = "DELETE /repos/{owner}/{repo}/issues/{issue_number}/issue-field-values/{issue_field_id}"
+ 
+ 	// Pull request endpoints
+diff --git a/pkg/github/issues.go b/pkg/github/issues.go
+index 3000585..cf2ead2 100644
+--- a/pkg/github/issues.go
++++ b/pkg/github/issues.go
+@@ -403,87 +403,6 @@ func resolveIssueRequestFieldValues(ctx context.Context, gqlClient *githubv4.Cli
+ 	return resolved, fieldIDsToDelete, nil
+ }
+ 
+-// fetchExistingIssueFieldValues retrieves the current field values for an issue
+-// as IssueRequestFieldValue entries, ready to be merged before an update.
+-func fetchExistingIssueFieldValues(ctx context.Context, gqlClient *githubv4.Client, owner, repo string, issueNumber int) ([]*github.IssueRequestFieldValue, error) {
+-	ctxWithFeatures := ghcontext.WithGraphQLFeatures(ctx, "issue_fields", "repo_issue_fields")
+-
+-	var query struct {
+-		Repository struct {
+-			Issue struct {
+-				IssueFieldValues struct {
+-					Nodes []IssueFieldValueFragment
+-				} `graphql:"issueFieldValues(first: 25)"`
+-			} `graphql:"issue(number: $number)"`
+-		} `graphql:"repository(owner: $owner, name: $repo)"`
+-	}
+-
+-	vars := map[string]any{
+-		"owner":  githubv4.String(owner),
+-		"repo":   githubv4.String(repo),
+-		"number": githubv4.Int(issueNumber), // #nosec G115 - issue numbers are always small positive integers
+-	}
+-
+-	if err := gqlClient.Query(ctxWithFeatures, &query, vars); err != nil {
+-		return nil, fmt.Errorf("failed to fetch existing issue field values: %w", err)
+-	}
+-
+-	var result []*github.IssueRequestFieldValue
+-	for _, node := range query.Repository.Issue.IssueFieldValues.Nodes {
+-		var fieldIDStr string
+-		var value any
+-
+-		switch node.TypeName {
+-		case "IssueFieldDateValue":
+-			fieldIDStr = node.DateValue.Field.FullDatabaseIDStr()
+-			value = string(node.DateValue.Value)
+-		case "IssueFieldNumberValue":
+-			fieldIDStr = node.NumberValue.Field.FullDatabaseIDStr()
+-			value = float64(node.NumberValue.Value)
+-		case "IssueFieldSingleSelectValue":
+-			fieldIDStr = node.SingleSelectValue.Field.FullDatabaseIDStr()
+-			value = string(node.SingleSelectValue.Value)
+-		case "IssueFieldTextValue":
+-			fieldIDStr = node.TextValue.Field.FullDatabaseIDStr()
+-			value = string(node.TextValue.Value)
+-		default:
+-			continue
+-		}
+-
+-		fieldID := parseFullDatabaseID(fieldIDStr)
+-		if fieldID == 0 {
+-			continue
+-		}
+-
+-		result = append(result, &github.IssueRequestFieldValue{
+-			FieldID: fieldID,
+-			Value:   value,
+-		})
+-	}
+-
+-	return result, nil
+-}
+-
+-// mergeIssueFieldValues returns a merged slice where incoming values override existing ones
+-// for the same field ID, and existing fields not present in incoming are preserved.
+-// Ordering is deterministic: incoming entries first in their original order, followed by any
+-// existing entries (in their original order) whose field IDs weren't seen in incoming.
+-func mergeIssueFieldValues(existing, incoming []*github.IssueRequestFieldValue) []*github.IssueRequestFieldValue {
+-	seen := make(map[int64]struct{}, len(incoming))
+-	result := make([]*github.IssueRequestFieldValue, 0, len(existing)+len(incoming))
+-	for _, v := range incoming {
+-		seen[v.FieldID] = struct{}{}
+-		result = append(result, v)
+-	}
+-	for _, v := range existing {
+-		if _, ok := seen[v.FieldID]; ok {
+-			continue
+-		}
+-		result = append(result, v)
+-	}
+-	return result
+-}
+-
+ // IssueFragment represents a fragment of an issue node in the GraphQL API.
+ type IssueFragment struct {
+ 	Number     githubv4.Int
+@@ -3436,49 +3355,6 @@ func updateIssue(ctx context.Context, client *github.Client, gqlClient *githubv4
+ 		issueRequest.Type = new(issueType)
+ 	}
+ 
+-	// Field IDs to clear via DELETE after the PATCH. See the post-PATCH loop
+-	// for why we can't just rely on REST set semantics.
+-	var fallbackDeleteFieldIDs []int64
+-
+-	if len(issueFieldValues) > 0 || len(fieldIDsToDelete) > 0 {
+-		// REST PATCH uses set semantics, so fetch existing values, merge in
+-		// the new ones, then drop anything explicitly deleted.
+-		existing, err := fetchExistingIssueFieldValues(ctx, gqlClient, owner, repo, issueNumber)
+-		if err != nil {
+-			return ghErrors.NewGitHubGraphQLErrorResponse(ctx, "failed to fetch existing issue field values", err), nil, nil
+-		}
+-		merged := mergeIssueFieldValues(existing, issueFieldValues)
+-		if len(fieldIDsToDelete) > 0 {
+-			deleteSet := make(map[int64]bool, len(fieldIDsToDelete))
+-			for _, id := range fieldIDsToDelete {
+-				deleteSet[id] = true
+-			}
+-			kept := make([]*github.IssueRequestFieldValue, 0, len(merged))
+-			for _, v := range merged {
+-				if !deleteSet[v.FieldID] {
+-					kept = append(kept, v)
+-				}
+-			}
+-			merged = kept
+-		}
+-		if len(merged) == 0 && len(fieldIDsToDelete) > 0 {
+-			// Only queue DELETEs for fields actually present — the endpoint
+-			// returns 404 otherwise, and "delete a field that isn't set" should
+-			// stay a no-op (callers often invoke delete:true idempotently).
+-			existingIDs := make(map[int64]bool, len(existing))
+-			for _, e := range existing {
+-				existingIDs[e.FieldID] = true
+-			}
+-			for _, id := range fieldIDsToDelete {
+-				if existingIDs[id] {
+-					fallbackDeleteFieldIDs = append(fallbackDeleteFieldIDs, id)
+-				}
+-			}
+-		} else {
+-			issueRequest.IssueFieldValues = merged
+-		}
+-	}
+-
+ 	updatedIssue, resp, err := patchIssue(ctx, client, owner, repo, issueNumber, issueRequest, issueType, updateOptions.IssueTypeProvided)
+ 	if err != nil {
+ 		return ghErrors.NewGitHubAPIErrorResponse(ctx,
+@@ -3497,16 +3373,23 @@ func updateIssue(ctx context.Context, client *github.Client, gqlClient *githubv4
+ 		return ghErrors.NewGitHubAPIStatusErrorResponse(ctx, "failed to update issue", resp, body), nil, nil
+ 	}
+ 
+-	// Per-field DELETE fallback. The PATCH can't clear field values when the
+-	// merged set is empty — go-github's `omitempty` strips the empty slice
+-	// and the dotcom REST handler skips its issue_field_values block when the
+-	// key is absent. Errors are aggregated (not short-circuited) so callers
+-	// can see which fields succeeded and which need retry.
+-	if len(fallbackDeleteFieldIDs) > 0 {
++	// Issue field values go through the per-field endpoints, not the PATCH
++	// above: the PATCH replaces the whole set, so writing back values read
++	// earlier would revert concurrent changes to other fields.
++	if len(issueFieldValues) > 0 {
++		fieldsResp, err := addIssueFieldValues(ctx, client, owner, repo, issueNumber, issueFieldValues)
++		if err != nil {
++			return ghErrors.NewGitHubAPIErrorResponse(ctx, "failed to set issue field values", fieldsResp, err), nil, nil
++		}
++	}
++
++	// Errors are aggregated (not short-circuited) so callers can see which
++	// fields were cleared and which need retry.
++	if len(fieldIDsToDelete) > 0 {
+ 		var failedIDs, succeededIDs []int64
+ 		var firstFailureErr error
+ 		var firstFailureResp *github.Response
+-		for _, fieldID := range fallbackDeleteFieldIDs {
++		for _, fieldID := range fieldIDsToDelete {
+ 			path := fmt.Sprintf("repos/%s/%s/issues/%d/issue-field-values/%d", owner, repo, issueNumber, fieldID)
+ 			req, err := client.NewRequest(ctx, http.MethodDelete, path, nil)
+ 			if err != nil {
+@@ -3517,7 +3400,8 @@ func updateIssue(ctx context.Context, client *github.Client, gqlClient *githubv4
+ 				continue
+ 			}
+ 			delResp, err := client.Do(req, nil)
+-			if err != nil {
++			// 404 means the field has no value, so clearing it again stays a no-op.
++			if err != nil && (delResp == nil || delResp.StatusCode != http.StatusNotFound) {
+ 				failedIDs = append(failedIDs, fieldID)
+ 				if firstFailureErr == nil {
+ 					firstFailureErr = err
+@@ -3642,6 +3526,21 @@ func patchIssue(ctx context.Context, client *github.Client, owner, repo string,
+ 	return issue, resp, err
+ }
+ 
++// addIssueFieldValues sets the given issue field values and leaves every other
++// field on the issue unchanged. It must not be called with an empty slice: the
++// endpoint treats an empty list as "clear all values".
++func addIssueFieldValues(ctx context.Context, client *github.Client, owner, repo string, issueNumber int, values []*github.IssueRequestFieldValue) (*github.Response, error) {
++	path := fmt.Sprintf("repos/%s/%s/issues/%d/issue-field-values", owner, repo, issueNumber)
++	body := struct {
++		IssueFieldValues []*github.IssueRequestFieldValue `json:"issue_field_values"`
++	}{IssueFieldValues: values}
++	req, err := client.NewRequest(ctx, http.MethodPost, path, body)
++	if err != nil {
++		return nil, err
++	}
++	return client.Do(req, nil)
++}
++
+ // ListIssues creates a tool to list issues in a GitHub repository.
+ type ListIssuesInput struct {
+ 	Owner        string                  `json:"owner"`
+diff --git a/pkg/github/issues_delete_test.go b/pkg/github/issues_delete_test.go
+index a8e403a..7887e82 100644
+--- a/pkg/github/issues_delete_test.go
++++ b/pkg/github/issues_delete_test.go
+@@ -12,35 +12,57 @@ import (
+ 	"github.com/github/github-mcp-server/v2/internal/githubv4mock"
+ 	gogithub "github.com/google/go-github/v92/github"
+ 	"github.com/shurcooL/githubv4"
+-	"github.com/stretchr/testify/assert"
+ 	"github.com/stretchr/testify/require"
+ )
+ 
+-// Test_IssueRequest_EmptyFieldValues_OmittedByJSON pins the omitempty
+-// behaviour that makes the DELETE fallback necessary. If go-github ever drops
+-// the tag, the REST PATCH alone could clear field values and this test would
+-// fail to remind us.
+-func Test_IssueRequest_EmptyFieldValues_OmittedByJSON(t *testing.T) {
+-	t.Parallel()
+-
+-	req := &gogithub.UpdateIssueRequest{
+-		Title:            new("still here"),
+-		IssueFieldValues: []*gogithub.IssueRequestFieldValue{},
+-	}
+-	body, err := json.Marshal(req)
+-	require.NoError(t, err)
+-
+-	assert.NotContains(t, string(body), "issue_field_values",
+-		"empty IssueFieldValues should be dropped by omitempty — this is why the REST PATCH alone can't clear field values when the merged list ends up empty, and why we fall back to the dedicated DELETE endpoint")
+-	assert.Contains(t, string(body), `"title":"still here"`,
+-		"sanity check: other fields still serialise")
++// newStaleFieldValuesGQLClient answers a read of issue 42's field values with
++// a snapshot in which field 202 still holds a value another caller has since
++// changed. An update that writes back what it read reverts that change.
++func newStaleFieldValuesGQLClient() *githubv4.Client {
++	return githubv4.NewClient(githubv4mock.NewMockedHTTPClient(
++		githubv4mock.NewQueryMatcher(
++			struct {
++				Repository struct {
++					Issue struct {
++						IssueFieldValues struct {
++							Nodes []IssueFieldValueFragment
++						} `graphql:"issueFieldValues(first: 25)"`
++					} `graphql:"issue(number: $number)"`
++				} `graphql:"repository(owner: $owner, name: $repo)"`
++			}{},
++			map[string]any{
++				"owner":  githubv4.String("owner"),
++				"repo":   githubv4.String("repo"),
++				"number": githubv4.Int(42),
++			},
++			githubv4mock.DataResponse(map[string]any{
++				"repository": map[string]any{
++					"issue": map[string]any{
++						"issueFieldValues": map[string]any{
++							"nodes": []any{
++								map[string]any{
++									"__typename": "IssueFieldSingleSelectValue",
++									"field":      map[string]any{"fullDatabaseId": "101", "name": "Priority"},
++									"value":      "P1",
++								},
++								map[string]any{
++									"__typename": "IssueFieldDateValue",
++									"field":      map[string]any{"fullDatabaseId": "202", "name": "Target date"},
++									"value":      "2026-01-01",
++								},
++							},
++						},
++					},
++				},
++			}),
++		),
++	))
+ }
+ 
+-// Test_UpdateIssue_DeleteLastFieldValueCallsDeleteEndpoint covers the bug fix:
+-// when the kept set ends up empty, the PATCH alone can't clear the field
+-// (omitempty strips the empty slice), so UpdateIssue follows up with a DELETE
+-// to the dedicated endpoint.
+-func Test_UpdateIssue_DeleteLastFieldValueCallsDeleteEndpoint(t *testing.T) {
++// Test_UpdateIssue_SetFieldDoesNotRewriteOtherFields: setting one field must
++// send only that field, through the additive endpoint, never via the issue
++// PATCH (which replaces the whole set).
++func Test_UpdateIssue_SetFieldDoesNotRewriteOtherFields(t *testing.T) {
+ 	t.Parallel()
+ 
+ 	mockIssue := &gogithub.Issue{
+@@ -51,78 +73,40 @@ func Test_UpdateIssue_DeleteLastFieldValueCallsDeleteEndpoint(t *testing.T) {
+ 	}
+ 
+ 	var (
+-		mu                sync.Mutex
+-		capturedPatchBody []byte
+-		deletePaths       []string
++		mu         sync.Mutex
++		patchBody  []byte
++		fieldsBody []byte
+ 	)
+ 
+ 	restClient := mustNewGHClient(t, MockHTTPClientWithHandlers(map[string]http.HandlerFunc{
+ 		PatchReposIssuesByOwnerByRepoByIssueNumber: func(w http.ResponseWriter, r *http.Request) {
+ 			body, _ := io.ReadAll(r.Body)
+ 			mu.Lock()
+-			capturedPatchBody = body
++			patchBody = body
+ 			mu.Unlock()
+ 			w.Header().Set("Content-Type", "application/json")
+ 			w.WriteHeader(http.StatusOK)
+ 			_ = json.NewEncoder(w).Encode(mockIssue)
+ 		},
+-		DeleteReposIssuesIssueFieldValueByOwnerByRepoByIssueNumber: func(w http.ResponseWriter, r *http.Request) {
++		PostReposIssuesIssueFieldValuesByOwnerByRepoByIssueNumber: func(w http.ResponseWriter, r *http.Request) {
++			body, _ := io.ReadAll(r.Body)
+ 			mu.Lock()
+-			deletePaths = append(deletePaths, r.URL.Path)
++			fieldsBody = body
+ 			mu.Unlock()
+-			w.WriteHeader(http.StatusNoContent)
++			w.Header().Set("Content-Type", "application/json")
++			w.WriteHeader(http.StatusOK)
++			_, _ = w.Write([]byte(`[]`))
+ 		},
+ 	}))
+ 
+-	// Existing field values for the merge step. Returning the field we're
+-	// about to delete makes the kept list empty, triggering the fallback DELETE.
+-	existingFieldsResponse := githubv4mock.DataResponse(map[string]any{
+-		"repository": map[string]any{
+-			"issue": map[string]any{
+-				"issueFieldValues": map[string]any{
+-					"nodes": []any{
+-						map[string]any{
+-							"__typename": "IssueFieldSingleSelectValue",
+-							"field": map[string]any{
+-								"fullDatabaseId": "101",
+-								"name":           "Priority",
+-							},
+-							"value": "P1",
+-						},
+-					},
+-				},
+-			},
+-		},
+-	})
+-
+-	gqlClient := githubv4.NewClient(githubv4mock.NewMockedHTTPClient(
+-		githubv4mock.NewQueryMatcher(
+-			struct {
+-				Repository struct {
+-					Issue struct {
+-						IssueFieldValues struct {
+-							Nodes []IssueFieldValueFragment
+-						} `graphql:"issueFieldValues(first: 25)"`
+-					} `graphql:"issue(number: $number)"`
+-				} `graphql:"repository(owner: $owner, name: $repo)"`
+-			}{},
+-			map[string]any{
+-				"owner":  githubv4.String("owner"),
+-				"repo":   githubv4.String("repo"),
+-				"number": githubv4.Int(42),
+-			},
+-			existingFieldsResponse,
+-		),
+-	))
+-
+ 	result, err := UpdateIssue(
+ 		context.Background(),
+ 		restClient,
+-		gqlClient,
++		newStaleFieldValuesGQLClient(),
+ 		"owner", "repo", 42,
+ 		"", "", nil, nil, 0, "",
++		[]*gogithub.IssueRequestFieldValue{{FieldID: 101, Value: "P2"}},
+ 		nil,
+-		[]int64{101},
+ 		"", "", 0,
+ 	)
+ 	require.NoError(t, err)
+@@ -132,16 +116,16 @@ func Test_UpdateIssue_DeleteLastFieldValueCallsDeleteEndpoint(t *testing.T) {
+ 
+ 	mu.Lock()
+ 	defer mu.Unlock()
+-	require.NotContains(t, string(capturedPatchBody), "issue_field_values",
+-		"REST PATCH body must not carry issue_field_values when the kept set is empty (PATCH body was: %s)", string(capturedPatchBody))
+-	require.Equal(t, []string{"/repos/owner/repo/issues/42/issue-field-values/101"}, deletePaths,
+-		"expected exactly one DELETE call to the dedicated endpoint for field id 101")
++	require.NotContains(t, string(patchBody), "issue_field_values",
++		"the issue PATCH replaces the whole field set, so it must not carry field values (PATCH body was: %s)", string(patchBody))
++	require.JSONEq(t, `{"issue_field_values":[{"field_id":101,"value":"P2"}]}`, string(fieldsBody),
++		"only the requested field should be sent, through the additive issue-field-values endpoint")
+ }
+ 
+-// Test_UpdateIssue_DeleteOneOfManyUsesSetSemantics: when the kept set is
+-// non-empty, set semantics handle the deletion implicitly via the PATCH — no
+-// DELETE follow-up needed.
+-func Test_UpdateIssue_DeleteOneOfManyUsesSetSemantics(t *testing.T) {
++// Test_UpdateIssue_DeleteFieldOnlyClearsThatField: clearing one field uses the
++// per-field DELETE endpoint and leaves every other field alone. In particular
++// it must not POST an empty list, which the endpoint treats as "clear all".
++func Test_UpdateIssue_DeleteFieldOnlyClearsThatField(t *testing.T) {
+ 	t.Parallel()
+ 
+ 	mockIssue := &gogithub.Issue{
+@@ -153,17 +137,27 @@ func Test_UpdateIssue_DeleteOneOfManyUsesSetSemantics(t *testing.T) {
+ 
+ 	var (
+ 		mu          sync.Mutex
++		patchBody   []byte
++		postCalls   int
+ 		deletePaths []string
+ 	)
+ 
+ 	restClient := mustNewGHClient(t, MockHTTPClientWithHandlers(map[string]http.HandlerFunc{
+-		PatchReposIssuesByOwnerByRepoByIssueNumber: expectRequestBody(t, map[string]any{
+-			"issue_field_values": []any{
+-				map[string]any{"field_id": float64(202), "value": "High"},
+-			},
+-		}).andThen(
+-			mockResponse(t, http.StatusOK, mockIssue),
+-		),
++		PatchReposIssuesByOwnerByRepoByIssueNumber: func(w http.ResponseWriter, r *http.Request) {
++			body, _ := io.ReadAll(r.Body)
++			mu.Lock()
++			patchBody = body
++			mu.Unlock()
++			w.Header().Set("Content-Type", "application/json")
++			w.WriteHeader(http.StatusOK)
++			_ = json.NewEncoder(w).Encode(mockIssue)
++		},
++		PostReposIssuesIssueFieldValuesByOwnerByRepoByIssueNumber: func(w http.ResponseWriter, _ *http.Request) {
++			mu.Lock()
++			postCalls++
++			mu.Unlock()
++			w.WriteHeader(http.StatusOK)
++		},
+ 		DeleteReposIssuesIssueFieldValueByOwnerByRepoByIssueNumber: func(w http.ResponseWriter, r *http.Request) {
+ 			mu.Lock()
+ 			deletePaths = append(deletePaths, r.URL.Path)
+@@ -172,51 +166,10 @@ func Test_UpdateIssue_DeleteOneOfManyUsesSetSemantics(t *testing.T) {
+ 		},
+ 	}))
+ 
+-	existingFieldsResponse := githubv4mock.DataResponse(map[string]any{
+-		"repository": map[string]any{
+-			"issue": map[string]any{
+-				"issueFieldValues": map[string]any{
+-					"nodes": []any{
+-						map[string]any{
+-							"__typename": "IssueFieldSingleSelectValue",
+-							"field":      map[string]any{"fullDatabaseId": "101", "name": "Priority"},
+-							"value":      "P1",
+-						},
+-						map[string]any{
+-							"__typename": "IssueFieldSingleSelectValue",
+-							"field":      map[string]any{"fullDatabaseId": "202", "name": "Impact"},
+-							"value":      "High",
+-						},
+-					},
+-				},
+-			},
+-		},
+-	})
+-
+-	gqlClient := githubv4.NewClient(githubv4mock.NewMockedHTTPClient(
+-		githubv4mock.NewQueryMatcher(
+-			struct {
+-				Repository struct {
+-					Issue struct {
+-						IssueFieldValues struct {
+-							Nodes []IssueFieldValueFragment
+-						} `graphql:"issueFieldValues(first: 25)"`
+-					} `graphql:"issue(number: $number)"`
+-				} `graphql:"repository(owner: $owner, name: $repo)"`
+-			}{},
+-			map[string]any{
+-				"owner":  githubv4.String("owner"),
+-				"repo":   githubv4.String("repo"),
+-				"number": githubv4.Int(42),
+-			},
+-			existingFieldsResponse,
+-		),
+-	))
+-
+ 	result, err := UpdateIssue(
+ 		context.Background(),
+ 		restClient,
+-		gqlClient,
++		newStaleFieldValuesGQLClient(),
+ 		"owner", "repo", 42,
+ 		"", "", nil, nil, 0, "",
+ 		nil,
+@@ -230,14 +183,16 @@ func Test_UpdateIssue_DeleteOneOfManyUsesSetSemantics(t *testing.T) {
+ 
+ 	mu.Lock()
+ 	defer mu.Unlock()
+-	require.Empty(t, deletePaths,
+-		"no DELETE call should fire when the kept set is non-empty — the PATCH's set semantics clear the deleted field on the server side")
++	require.NotContains(t, string(patchBody), "issue_field_values",
++		"the issue PATCH must not carry field values when clearing a field (PATCH body was: %s)", string(patchBody))
++	require.Zero(t, postCalls, "clearing a field must not call the add endpoint")
++	require.Equal(t, []string{"/repos/owner/repo/issues/42/issue-field-values/101"}, deletePaths,
++		"expected exactly one DELETE call to the dedicated endpoint for field id 101")
+ }
+ 
+-// Test_UpdateIssue_DeleteAbsentFieldIsNoOp: deleting a field that isn't set
+-// must not fire a DELETE (the endpoint would 404), preserving the pre-fix
+-// silent-no-op behaviour so idempotent delete:true callers don't break on
+-// retry.
++// Test_UpdateIssue_DeleteAbsentFieldIsNoOp: the DELETE endpoint returns 404
++// when the field has no value. That must not be reported as a failure, so
++// idempotent delete:true callers don't break on retry.
+ func Test_UpdateIssue_DeleteAbsentFieldIsNoOp(t *testing.T) {
+ 	t.Parallel()
+ 
+@@ -249,65 +204,25 @@ func Test_UpdateIssue_DeleteAbsentFieldIsNoOp(t *testing.T) {
+ 	}
+ 
+ 	var (
+-		mu                sync.Mutex
+-		capturedPatchBody []byte
+-		deletePaths       []string
++		mu          sync.Mutex
++		deletePaths []string
+ 	)
+ 
+ 	restClient := mustNewGHClient(t, MockHTTPClientWithHandlers(map[string]http.HandlerFunc{
+-		PatchReposIssuesByOwnerByRepoByIssueNumber: func(w http.ResponseWriter, r *http.Request) {
+-			body, _ := io.ReadAll(r.Body)
+-			mu.Lock()
+-			capturedPatchBody = body
+-			mu.Unlock()
+-			w.Header().Set("Content-Type", "application/json")
+-			w.WriteHeader(http.StatusOK)
+-			_ = json.NewEncoder(w).Encode(mockIssue)
+-		},
++		PatchReposIssuesByOwnerByRepoByIssueNumber: mockResponse(t, http.StatusOK, mockIssue),
+ 		DeleteReposIssuesIssueFieldValueByOwnerByRepoByIssueNumber: func(w http.ResponseWriter, r *http.Request) {
+ 			mu.Lock()
+ 			deletePaths = append(deletePaths, r.URL.Path)
+ 			mu.Unlock()
+-			// Fail loudly: if we get here, the fix is wrong.
+ 			w.WriteHeader(http.StatusNotFound)
++			_, _ = w.Write([]byte(`{"message":"Not Found"}`))
+ 		},
+ 	}))
+ 
+-	// Issue has no field values at all.
+-	existingFieldsResponse := githubv4mock.DataResponse(map[string]any{
+-		"repository": map[string]any{
+-			"issue": map[string]any{
+-				"issueFieldValues": map[string]any{
+-					"nodes": []any{},
+-				},
+-			},
+-		},
+-	})
+-
+-	gqlClient := githubv4.NewClient(githubv4mock.NewMockedHTTPClient(
+-		githubv4mock.NewQueryMatcher(
+-			struct {
+-				Repository struct {
+-					Issue struct {
+-						IssueFieldValues struct {
+-							Nodes []IssueFieldValueFragment
+-						} `graphql:"issueFieldValues(first: 25)"`
+-					} `graphql:"issue(number: $number)"`
+-				} `graphql:"repository(owner: $owner, name: $repo)"`
+-			}{},
+-			map[string]any{
+-				"owner":  githubv4.String("owner"),
+-				"repo":   githubv4.String("repo"),
+-				"number": githubv4.Int(42),
+-			},
+-			existingFieldsResponse,
+-		),
+-	))
+-
+ 	result, err := UpdateIssue(
+ 		context.Background(),
+ 		restClient,
+-		gqlClient,
++		githubv4.NewClient(githubv4mock.NewMockedHTTPClient()),
+ 		"owner", "repo", 42,
+ 		"", "", nil, nil, 0, "",
+ 		nil,
+@@ -321,16 +236,13 @@ func Test_UpdateIssue_DeleteAbsentFieldIsNoOp(t *testing.T) {
+ 
+ 	mu.Lock()
+ 	defer mu.Unlock()
+-	require.NotContains(t, string(capturedPatchBody), "issue_field_values",
+-		"PATCH body must not carry issue_field_values when nothing changed")
+-	require.Empty(t, deletePaths,
+-		"no DELETE call should fire for a field that isn't present on the issue — preserves the pre-fix silent-no-op behaviour and avoids a guaranteed 404")
++	require.Equal(t, []string{"/repos/owner/repo/issues/42/issue-field-values/101"}, deletePaths)
+ }
+ 
+-// Test_UpdateIssue_DeleteFallbackContinuesOnPartialFailure: a failing DELETE
++// Test_UpdateIssue_DeleteContinuesOnPartialFailure: a failing DELETE
+ // must not short-circuit subsequent ones, and the error must name which IDs
+ // succeeded and which failed so callers can retry the right ones.
+-func Test_UpdateIssue_DeleteFallbackContinuesOnPartialFailure(t *testing.T) {
++func Test_UpdateIssue_DeleteContinuesOnPartialFailure(t *testing.T) {
+ 	t.Parallel()
+ 
+ 	mockIssue := &gogithub.Issue{
+@@ -366,56 +278,10 @@ func Test_UpdateIssue_DeleteFallbackContinuesOnPartialFailure(t *testing.T) {
+ 		},
+ 	}))
+ 
+-	existingFieldsResponse := githubv4mock.DataResponse(map[string]any{
+-		"repository": map[string]any{
+-			"issue": map[string]any{
+-				"issueFieldValues": map[string]any{
+-					"nodes": []any{
+-						map[string]any{
+-							"__typename": "IssueFieldSingleSelectValue",
+-							"field":      map[string]any{"fullDatabaseId": "101", "name": "Priority"},
+-							"value":      "P1",
+-						},
+-						map[string]any{
+-							"__typename": "IssueFieldSingleSelectValue",
+-							"field":      map[string]any{"fullDatabaseId": "202", "name": "Visibility"},
+-							"value":      "High",
+-						},
+-						map[string]any{
+-							"__typename": "IssueFieldSingleSelectValue",
+-							"field":      map[string]any{"fullDatabaseId": "303", "name": "Impact"},
+-							"value":      "Critical",
+-						},
+-					},
+-				},
+-			},
+-		},
+-	})
+-
+-	gqlClient := githubv4.NewClient(githubv4mock.NewMockedHTTPClient(
+-		githubv4mock.NewQueryMatcher(
+-			struct {
+-				Repository struct {
+-					Issue struct {
+-						IssueFieldValues struct {
+-							Nodes []IssueFieldValueFragment
+-						} `graphql:"issueFieldValues(first: 25)"`
+-					} `graphql:"issue(number: $number)"`
+-				} `graphql:"repository(owner: $owner, name: $repo)"`
+-			}{},
+-			map[string]any{
+-				"owner":  githubv4.String("owner"),
+-				"repo":   githubv4.String("repo"),
+-				"number": githubv4.Int(42),
+-			},
+-			existingFieldsResponse,
+-		),
+-	))
+-
+ 	result, err := UpdateIssue(
+ 		context.Background(),
+ 		restClient,
+-		gqlClient,
++		githubv4.NewClient(githubv4mock.NewMockedHTTPClient()),
+ 		"owner", "repo", 42,
+ 		"", "", nil, nil, 0, "",
+ 		nil,
+diff --git a/pkg/github/issues_test.go b/pkg/github/issues_test.go
+index 79eeb22..0206d0e 100644
+--- a/pkg/github/issues_test.go
++++ b/pkg/github/issues_test.go
+@@ -4768,34 +4768,20 @@ func Test_UpdateIssue(t *testing.T) {
+ 			name: "partial update with issue fields reconciled by names",
+ 			mockedRESTClient: MockHTTPClientWithHandlers(map[string]http.HandlerFunc{
+ 				PatchReposIssuesByOwnerByRepoByIssueNumber: expectRequestBody(t, map[string]any{
++					"title": "Updated Title",
++				}).andThen(
++					mockResponse(t, http.StatusOK, mockUpdatedIssue),
++				),
++				PostReposIssuesIssueFieldValuesByOwnerByRepoByIssueNumber: expectRequestBody(t, map[string]any{
+ 					"issue_field_values": []any{
+ 						map[string]any{"field_id": float64(101), "value": "P1"},
+ 						map[string]any{"field_id": float64(102), "value": "Acme"},
+ 					},
+-					"title": "Updated Title",
+ 				}).andThen(
+-					mockResponse(t, http.StatusOK, mockUpdatedIssue),
++					mockResponse(t, http.StatusOK, []any{}),
+ 				),
+ 			}),
+ 			mockedGQLClient: githubv4mock.NewMockedHTTPClient(
+-				// fetch-and-merge: returns no existing fields so the incoming values are used as-is
+-				githubv4mock.NewQueryMatcher(
+-					"query($number:Int!$owner:String!$repo:String!){repository(owner: $owner, name: $repo){issue(number: $number){issueFieldValues(first: 25){nodes{__typename,... on IssueFieldDateValue{field{... on IssueFieldDate{name,fullDatabaseId},... on IssueFieldNumber{name,fullDatabaseId},... on IssueFieldSingleSelect{name,fullDatabaseId},... on IssueFieldText{name,fullDatabaseId}},value},... on IssueFieldNumberValue{field{... on IssueFieldDate{name,fullDatabaseId},... on IssueFieldNumber{name,fullDatabaseId},... on IssueFieldSingleSelect{name,fullDatabaseId},... on IssueFieldText{name,fullDatabaseId}},valueNumber: value},... on IssueFieldSingleSelectValue{field{... on IssueFieldDate{name,fullDatabaseId},... on IssueFieldNumber{name,fullDatabaseId},... on IssueFieldSingleSelect{name,fullDatabaseId},... on IssueFieldText{name,fullDatabaseId}},value},... on IssueFieldTextValue{field{... on IssueFieldDate{name,fullDatabaseId},... on IssueFieldNumber{name,fullDatabaseId},... on IssueFieldSingleSelect{name,fullDatabaseId},... on IssueFieldText{name,fullDatabaseId}},value}}}}}}",
+-					map[string]any{
+-						"owner":  githubv4.String("owner"),
+-						"repo":   githubv4.String("repo"),
+-						"number": githubv4.Int(123),
+-					},
+-					githubv4mock.DataResponse(map[string]any{
+-						"repository": map[string]any{
+-							"issue": map[string]any{
+-								"issueFieldValues": map[string]any{
+-									"nodes": []any{},
+-								},
+-							},
+-						},
+-					}),
+-				),
+ 				githubv4mock.NewQueryMatcher(
+ 					issueFieldWriteMetadataQuery{},
+ 					map[string]any{
+diff --git a/pkg/github/typed_consolidated_issue_outputs_test.go b/pkg/github/typed_consolidated_issue_outputs_test.go
+index 60374e1..9158209 100644
+--- a/pkg/github/typed_consolidated_issue_outputs_test.go
++++ b/pkg/github/typed_consolidated_issue_outputs_test.go
+@@ -608,7 +608,6 @@ func TestTypedIssueWriteMutationOptionalityAndFields(t *testing.T) {
+ 				}
+ 				require.NoError(t, json.NewEncoder(w).Encode(response))
+ 			})}}
+-			existing := `[{"__typename":"IssueFieldTextValue","field":{"fullDatabaseId":"1","name":"Text"},"value":"old"},{"__typename":"IssueFieldDateValue","field":{"fullDatabaseId":"3","name":"Date"},"value":"2026-01-01"}]`
+ 			gql := &http.Client{Transport: recorderTransport{handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+ 				var request struct {
+ 					Query string `json:"query"`
+@@ -622,8 +621,6 @@ func TestTypedIssueWriteMutationOptionalityAndFields(t *testing.T) {
+ 						{"__typename":"IssueFieldDate","fullDatabaseId":"3","name":"Date","dataType":"DATE"},
+ 						{"__typename":"IssueFieldSingleSelect","fullDatabaseId":"4","name":"Priority","dataType":"SINGLE_SELECT","options":[{"fullDatabaseId":"40","name":"High"}]}
+ 					]}}}}`))
+-				case strings.Contains(request.Query, "issueFieldValues("):
+-					_, _ = w.Write([]byte(`{"data":{"repository":{"issue":{"issueFieldValues":{"nodes":` + existing + `}}}}}`))
+ 				default:
+ 					t.Errorf("unexpected GraphQL mutation/query: %s", request.Query)
+ 				}
+@@ -641,7 +638,7 @@ func TestTypedIssueWriteMutationOptionalityAndFields(t *testing.T) {
+ 				{map[string]any{"issue_fields": []any{
+ 					map[string]any{"field_name": "Number", "value": 0},
+ 					map[string]any{"field_name": "Text", "delete": true},
+-				}}, `{"issue_field_values":[{"field_id":2,"value":0},{"field_id":3,"value":"2026-01-01"}]}`},
++				}}, `{"issue_field_values":[{"field_id":2,"value":0}]}`},
+ 				{map[string]any{"method": "create", "title": "Subject", "body": "", "issue_fields": []any{
+ 					map[string]any{"field_name": " text ", "value": ""},
+ 					map[string]any{"field_name": "Number", "value": 0},
+@@ -658,7 +655,7 @@ func TestTypedIssueWriteMutationOptionalityAndFields(t *testing.T) {
+ 				assertConsolidatedResult(t, session, schemas, "issue_write", args, resultText)
+ 				assert.JSONEq(t, tc.body, requestBody)
+ 			}
+-			existing = `[{"__typename":"IssueFieldTextValue","field":{"fullDatabaseId":"1","name":"Text"},"value":"old"}]`
++			deleted = nil
+ 			assertConsolidatedResult(t, session, schemas, "issue_write", map[string]any{
+ 				"method": "update", "owner": "owner", "repo": "repo", "issue_number": 1,
+ 				"issue_fields": []any{map[string]any{"field_name": "Text", "delete": true}},
+-- 
+2.50.1 (Apple Git-155)
+

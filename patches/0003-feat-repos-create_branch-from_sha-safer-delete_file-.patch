@@ -1,0 +1,860 @@
+From 557f394d7e7d33ef6f023a904ccb786e43cab7fe Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 9 Nov 2026 12:50:51 -0700
+Subject: [PATCH 3/8] feat(repos): create_branch from_sha; safer delete_file
+ and push_files; reject no-op issue updates
+
+create_branch accepts from_sha to start a branch at a commit.
+delete_file refuses directory paths and missing files, and takes an
+optional sha precondition. push_files no longer creates a missing
+branch unless create_branch is true, and creates it only once the
+commit exists so a failure leaves no branch behind. issue_write update
+fails when it would change nothing.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QV62ZkZa646Swi2zdbdnXN
+---
+ pkg/github/__toolsnaps__/create_branch.snap   |   4 +
+ pkg/github/__toolsnaps__/delete_file.snap     |   4 +
+ pkg/github/__toolsnaps__/push_files.snap      |   4 +
+ pkg/github/issues.go                          |   6 +
+ pkg/github/issues_test.go                     |  45 +++
+ pkg/github/repositories.go                    | 148 +++++++---
+ pkg/github/repositories_helper.go             |  24 --
+ pkg/github/repositories_test.go               | 269 +++++++++++++++++-
+ pkg/github/repository_tool_types.go           |  13 +-
+ .../typed_consolidated_issue_outputs_test.go  |  13 +-
+ pkg/github/typed_repository_outputs_test.go   |   2 +
+ 11 files changed, 450 insertions(+), 82 deletions(-)
+
+diff --git a/pkg/github/__toolsnaps__/create_branch.snap b/pkg/github/__toolsnaps__/create_branch.snap
+index b0039d1..4509163 100644
+--- a/pkg/github/__toolsnaps__/create_branch.snap
++++ b/pkg/github/__toolsnaps__/create_branch.snap
+@@ -27,6 +27,10 @@
+         "description": "Source branch (defaults to repo default)",
+         "type": "string"
+       },
++      "from_sha": {
++        "description": "Full 40-character commit SHA to start the branch from. Cannot be combined with from_branch",
++        "type": "string"
++      },
+       "owner": {
+         "description": "Repository owner",
+         "type": "string",
+diff --git a/pkg/github/__toolsnaps__/delete_file.snap b/pkg/github/__toolsnaps__/delete_file.snap
+index 6240de7..236dc21 100644
+--- a/pkg/github/__toolsnaps__/delete_file.snap
++++ b/pkg/github/__toolsnaps__/delete_file.snap
+@@ -41,6 +41,10 @@
+         "description": "Repository name",
+         "type": "string",
+         "x-mcp-header": "repo"
++      },
++      "sha": {
++        "description": "Blob SHA of the file as last read. If provided, the delete fails when the file on the branch has a different SHA",
++        "type": "string"
+       }
+     },
+     "required": [
+diff --git a/pkg/github/__toolsnaps__/push_files.snap b/pkg/github/__toolsnaps__/push_files.snap
+index ace5e47..be2b346 100644
+--- a/pkg/github/__toolsnaps__/push_files.snap
++++ b/pkg/github/__toolsnaps__/push_files.snap
+@@ -23,6 +23,10 @@
+         "description": "Branch to push to",
+         "type": "string"
+       },
++      "create_branch": {
++        "description": "Create the branch from the default branch if it does not exist. When false (the default), pushing to a missing branch fails",
++        "type": "boolean"
++      },
+       "files": {
+         "description": "Array of file objects to push, each object with path (string) and content (string)",
+         "items": {
+diff --git a/pkg/github/issues.go b/pkg/github/issues.go
+index c9d4c72..625c69d 100644
+--- a/pkg/github/issues.go
++++ b/pkg/github/issues.go
+@@ -3327,6 +3327,12 @@ func updateIssue(ctx context.Context, client *github.Client, gqlClient *githubv4
+ 		updateOptions.IssueTypeProvided = updateOptions.IssueTypeProvided || opt.IssueTypeProvided
+ 	}
+ 
++	if title == "" && body == "" && !updateOptions.LabelsProvided && !updateOptions.AssigneesProvided &&
++		milestoneNum == 0 && issueType == "" && !updateOptions.IssueTypeProvided &&
++		len(issueFieldValues) == 0 && len(fieldIDsToDelete) == 0 && state == "" && stateReason == "" {
++		return utils.NewToolResultError("no changes requested: update needs at least one of title, body, labels, assignees, milestone, type, state, state_reason or issue_fields"), nil, nil
++	}
++
+ 	// Create the issue request with only provided fields
+ 	issueRequest := github.UpdateIssueRequest{}
+ 
+diff --git a/pkg/github/issues_test.go b/pkg/github/issues_test.go
+index 0206d0e..b70ffa4 100644
+--- a/pkg/github/issues_test.go
++++ b/pkg/github/issues_test.go
+@@ -5238,6 +5238,51 @@ func Test_UpdateIssueClearsLabelsAndAssignees(t *testing.T) {
+ 	assert.Equal(t, updatedIssue.GetHTMLURL(), updateResp.URL)
+ }
+ 
++func Test_UpdateIssueRejectsUpdateWithoutChanges(t *testing.T) {
++	serverTool := IssueWrite(translations.NullTranslationHelper)
++
++	// No REST or GraphQL endpoint is mocked: the update must fail before any request.
++	client := mustNewGHClient(t, MockHTTPClientWithHandlers(map[string]http.HandlerFunc{}))
++	gqlClient := githubv4.NewClient(githubv4mock.NewMockedHTTPClient())
++	deps := BaseDeps{
++		Client:    client,
++		GQLClient: gqlClient,
++	}
++	handler := serverTool.Handler(deps)
++
++	tests := []struct {
++		name string
++		args map[string]any
++	}{
++		{
++			name: "no fields",
++			args: map[string]any{},
++		},
++		{
++			name: "only parameters the tool does not know",
++			args: map[string]any{"status": "closed", "label": "bug"},
++		},
++	}
++
++	for _, tc := range tests {
++		t.Run(tc.name, func(t *testing.T) {
++			args := map[string]any{
++				"method":       "update",
++				"owner":        "owner",
++				"repo":         "repo",
++				"issue_number": float64(8),
++			}
++			maps.Copy(args, tc.args)
++			request := createMCPRequest(args)
++			result, err := handler(ContextWithDeps(context.Background(), deps), &request)
++
++			require.NoError(t, err)
++			require.True(t, result.IsError)
++			assert.Contains(t, getErrorResult(t, result).Text, "no changes requested")
++		})
++	}
++}
++
+ func Test_ParseISOTimestamp(t *testing.T) {
+ 	tests := []struct {
+ 		name         string
+diff --git a/pkg/github/repositories.go b/pkg/github/repositories.go
+index b884f48..2d9b8f0 100644
+--- a/pkg/github/repositories.go
++++ b/pkg/github/repositories.go
+@@ -1365,6 +1365,10 @@ func DeleteFile(t translations.TranslationHelperFunc) inventory.ServerTool {
+ 						Type:        "string",
+ 						Description: "Branch to delete the file from",
+ 					},
++					"sha": {
++						Type:        "string",
++						Description: "Blob SHA of the file as last read. If provided, the delete fails when the file on the branch has a different SHA",
++					},
+ 				},
+ 				Required: []string{"owner", "repo", "path", "message", "branch"},
+ 			},
+@@ -1427,6 +1431,25 @@ func DeleteFile(t translations.TranslationHelperFunc) inventory.ServerTool {
+ 				return ghErrors.NewGitHubAPIStatusErrorResponse(ctx, "failed to get commit", resp, body), nil, nil
+ 			}
+ 
++			// A tree entry with a nil SHA removes whatever is at the path, so a
++			// directory path would delete the whole directory. Check first.
++			entry, entryResp, err := getTreeEntry(ctx, client, owner, repo, baseCommit.GetTree().GetSHA(), path)
++			if err != nil {
++				if entryResp != nil {
++					return ghErrors.NewGitHubAPIErrorResponse(ctx, "failed to look up file", entryResp, err), nil, nil
++				}
++				return utils.NewToolResultError(fmt.Sprintf("failed to look up file: %s", err)), nil, nil
++			}
++			if entry == nil {
++				return utils.NewToolResultError(fmt.Sprintf("file %q does not exist on branch %q", path, branch)), nil, nil
++			}
++			if entry.GetType() == "tree" {
++				return utils.NewToolResultError(fmt.Sprintf("path %q is a directory; delete_file only deletes a single file", path)), nil, nil
++			}
++			if input.SHA != "" && !strings.EqualFold(input.SHA, entry.GetSHA()) {
++				return utils.NewToolResultError(fmt.Sprintf("file %q has changed on branch %q: its SHA is %s, not %s", path, branch, entry.GetSHA(), input.SHA)), nil, nil
++			}
++
+ 			// Create a tree entry for the file deletion by setting SHA to nil
+ 			treeEntries := []*github.TreeEntry{
+ 				{
+@@ -1555,6 +1578,10 @@ func CreateBranch(t translations.TranslationHelperFunc) inventory.ServerTool {
+ 						Type:        "string",
+ 						Description: "Source branch (defaults to repo default)",
+ 					},
++					"from_sha": {
++						Type:        "string",
++						Description: "Full 40-character commit SHA to start the branch from. Cannot be combined with from_branch",
++					},
+ 				},
+ 				Required: []string{"owner", "repo", "branch"},
+ 			},
+@@ -1574,45 +1601,52 @@ func CreateBranch(t translations.TranslationHelperFunc) inventory.ServerTool {
+ 				return utils.NewToolResultError("missing required parameter: branch"), nil, nil
+ 			}
+ 			fromBranch := input.FromBranch
++			fromSHA := input.FromSHA
++			if fromSHA != "" && fromBranch != "" {
++				return utils.NewToolResultError("from_sha cannot be combined with from_branch"), nil, nil
++			}
++			if fromSHA != "" && !looksLikeSHA(fromSHA) {
++				return utils.NewToolResultError("from_sha must be a full 40-character commit SHA"), nil, nil
++			}
+ 
+ 			client, err := deps.GetClient(ctx)
+ 			if err != nil {
+ 				return nil, nil, fmt.Errorf("failed to get GitHub client: %w", err)
+ 			}
+ 
+-			// Get the source branch SHA
+-			var ref *github.Reference
++			if fromSHA == "" {
++				if fromBranch == "" {
++					// Get default branch if from_branch not specified
++					repository, resp, err := client.Repositories.Get(ctx, owner, repo)
++					if err != nil {
++						return ghErrors.NewGitHubAPIErrorResponse(ctx,
++							"failed to get repository",
++							resp,
++							err,
++						), nil, nil
++					}
++					defer func() { _ = resp.Body.Close() }()
++
++					fromBranch = *repository.DefaultBranch
++				}
+ 
+-			if fromBranch == "" {
+-				// Get default branch if from_branch not specified
+-				repository, resp, err := client.Repositories.Get(ctx, owner, repo)
++				// Get SHA of source branch
++				ref, resp, err := client.Git.GetRef(ctx, owner, repo, "refs/heads/"+fromBranch)
+ 				if err != nil {
+ 					return ghErrors.NewGitHubAPIErrorResponse(ctx,
+-						"failed to get repository",
++						"failed to get reference",
+ 						resp,
+ 						err,
+ 					), nil, nil
+ 				}
+ 				defer func() { _ = resp.Body.Close() }()
+-
+-				fromBranch = *repository.DefaultBranch
++				fromSHA = *ref.Object.SHA
+ 			}
+ 
+-			// Get SHA of source branch
+-			ref, resp, err := client.Git.GetRef(ctx, owner, repo, "refs/heads/"+fromBranch)
+-			if err != nil {
+-				return ghErrors.NewGitHubAPIErrorResponse(ctx,
+-					"failed to get reference",
+-					resp,
+-					err,
+-				), nil, nil
+-			}
+-			defer func() { _ = resp.Body.Close() }()
+-
+ 			// Create new branch
+ 			newRef := github.CreateRef{
+ 				Ref: "refs/heads/" + branch,
+-				SHA: *ref.Object.SHA,
++				SHA: fromSHA,
+ 			}
+ 
+ 			createdRef, resp, err := client.Git.CreateRef(ctx, owner, repo, newRef)
+@@ -1684,6 +1718,10 @@ func PushFiles(t translations.TranslationHelperFunc) inventory.ServerTool {
+ 						Type:        "string",
+ 						Description: "Commit message",
+ 					},
++					"create_branch": {
++						Type:        "boolean",
++						Description: "Create the branch from the default branch if it does not exist. When false (the default), pushing to a missing branch fails",
++					},
+ 				},
+ 				Required: []string{"owner", "repo", "branch", "files", "message"},
+ 			},
+@@ -1764,12 +1802,19 @@ func PushFiles(t translations.TranslationHelperFunc) inventory.ServerTool {
+ 				defer func() { _ = resp.Body.Close() }()
+ 			}
+ 
++			if branchNotFound && !input.CreateBranch {
++				return utils.NewToolResultError(fmt.Sprintf("branch %q does not exist; set create_branch to true to create it from the default branch", branch)), nil, nil
++			}
++
++			// A new branch is created only after its commit exists, so a
++			// failure part way through does not leave an empty branch behind.
++			createBranch := branchNotFound
+ 			var baseCommit *github.Commit
+ 			if !repositoryIsEmpty {
+ 				if branchNotFound {
+-					ref, err = createReferenceFromDefaultBranch(ctx, client, owner, repo, branch)
++					ref, err = resolveDefaultBranch(ctx, client, owner, repo)
+ 					if err != nil {
+-						return utils.NewToolResultError(fmt.Sprintf("failed to create branch from default: %v", err)), nil, nil
++						return utils.NewToolResultError(fmt.Sprintf("failed to resolve default branch: %v", err)), nil, nil
+ 					}
+ 				}
+ 
+@@ -1786,6 +1831,18 @@ func PushFiles(t translations.TranslationHelperFunc) inventory.ServerTool {
+ 					defer func() { _ = resp.Body.Close() }()
+ 				}
+ 			} else {
++				repository, repoResp, err := client.Repositories.Get(ctx, owner, repo)
++				if err != nil {
++					return ghErrors.NewGitHubAPIErrorResponse(ctx, "failed to get repository", repoResp, err), nil, nil
++				}
++				if repoResp != nil && repoResp.Body != nil {
++					_ = repoResp.Body.Close()
++				}
++				createBranch = branch != repository.GetDefaultBranch()
++				if createBranch && !input.CreateBranch {
++					return utils.NewToolResultError(fmt.Sprintf("branch %q does not exist; set create_branch to true to create it from the default branch", branch)), nil, nil
++				}
++
+ 				var base *github.Commit
+ 				// Repository is empty, need to initialize it first
+ 				ref, base, err = initializeRepository(ctx, client, owner, repo)
+@@ -1793,15 +1850,6 @@ func PushFiles(t translations.TranslationHelperFunc) inventory.ServerTool {
+ 					return utils.NewToolResultError(fmt.Sprintf("failed to initialize repository: %v", err)), nil, nil
+ 				}
+ 
+-				defaultBranch := strings.TrimPrefix(*ref.Ref, "refs/heads/")
+-				if branch != defaultBranch {
+-					// Create the requested branch from the default branch
+-					ref, err = createReferenceFromDefaultBranch(ctx, client, owner, repo, branch)
+-					if err != nil {
+-						return utils.NewToolResultError(fmt.Sprintf("failed to create branch from default: %v", err)), nil, nil
+-					}
+-				}
+-
+ 				baseCommit = base
+ 			}
+ 
+@@ -1836,18 +1884,32 @@ func PushFiles(t translations.TranslationHelperFunc) inventory.ServerTool {
+ 				defer func() { _ = resp.Body.Close() }()
+ 			}
+ 
+-			// Update the reference to point to the new commit
+-			ref.Object.SHA = newCommit.SHA
+-			updatedRef, resp, err := client.Git.UpdateRef(ctx, owner, repo, *ref.Ref, github.UpdateRef{
+-				SHA:   *newCommit.SHA,
+-				Force: new(false),
+-			})
+-			if err != nil {
+-				return ghErrors.NewGitHubAPIErrorResponse(ctx,
+-					"failed to update reference",
+-					resp,
+-					err,
+-				), nil, nil
++			var updatedRef *github.Reference
++			if createBranch {
++				updatedRef, resp, err = client.Git.CreateRef(ctx, owner, repo, github.CreateRef{
++					Ref: "refs/heads/" + branch,
++					SHA: *newCommit.SHA,
++				})
++				if err != nil {
++					return ghErrors.NewGitHubAPIErrorResponse(ctx,
++						"failed to create branch",
++						resp,
++						err,
++					), nil, nil
++				}
++			} else {
++				// Update the reference to point to the new commit
++				updatedRef, resp, err = client.Git.UpdateRef(ctx, owner, repo, *ref.Ref, github.UpdateRef{
++					SHA:   *newCommit.SHA,
++					Force: new(false),
++				})
++				if err != nil {
++					return ghErrors.NewGitHubAPIErrorResponse(ctx,
++						"failed to update reference",
++						resp,
++						err,
++					), nil, nil
++				}
+ 			}
+ 			defer func() { _ = resp.Body.Close() }()
+ 
+diff --git a/pkg/github/repositories_helper.go b/pkg/github/repositories_helper.go
+index fe19832..e326434 100644
+--- a/pkg/github/repositories_helper.go
++++ b/pkg/github/repositories_helper.go
+@@ -71,30 +71,6 @@ func initializeRepository(ctx context.Context, client *github.Client, owner, rep
+ 	return ref, baseCommit, nil
+ }
+ 
+-// createReferenceFromDefaultBranch creates a new branch reference from the repository's default branch
+-func createReferenceFromDefaultBranch(ctx context.Context, client *github.Client, owner, repo, branch string) (*github.Reference, error) {
+-	defaultRef, err := resolveDefaultBranch(ctx, client, owner, repo)
+-	if err != nil {
+-		_, _ = ghErrors.NewGitHubAPIErrorToCtx(ctx, "failed to resolve default branch", nil, err)
+-		return nil, fmt.Errorf("failed to resolve default branch: %w", err)
+-	}
+-
+-	// Create the new branch reference
+-	createdRef, resp, err := client.Git.CreateRef(ctx, owner, repo, github.CreateRef{
+-		Ref: "refs/heads/" + branch,
+-		SHA: *defaultRef.Object.SHA,
+-	})
+-	if err != nil {
+-		_, _ = ghErrors.NewGitHubAPIErrorToCtx(ctx, "failed to create new branch reference", resp, err)
+-		return nil, fmt.Errorf("failed to create new branch reference: %w", err)
+-	}
+-	if resp != nil && resp.Body != nil {
+-		defer func() { _ = resp.Body.Close() }()
+-	}
+-
+-	return createdRef, nil
+-}
+-
+ const (
+ 	gitSymlinkMode   = "120000"
+ 	gitSubmoduleMode = "160000"
+diff --git a/pkg/github/repositories_test.go b/pkg/github/repositories_test.go
+index 9b40c93..23b1921 100644
+--- a/pkg/github/repositories_test.go
++++ b/pkg/github/repositories_test.go
+@@ -1380,6 +1380,7 @@ func Test_CreateBranch(t *testing.T) {
+ 	assert.Contains(t, schema.Properties, "repo")
+ 	assert.Contains(t, schema.Properties, "branch")
+ 	assert.Contains(t, schema.Properties, "from_branch")
++	assert.Contains(t, schema.Properties, "from_sha")
+ 	assert.ElementsMatch(t, schema.Required, []string{"owner", "repo", "branch"})
+ 
+ 	// Setup mock repository for default branch test
+@@ -1449,6 +1450,50 @@ func Test_CreateBranch(t *testing.T) {
+ 			expectError: false,
+ 			expectedRef: mockCreatedRef,
+ 		},
++		{
++			name: "successful branch creation from a commit SHA",
++			mockedClient: MockHTTPClientWithHandlers(map[string]http.HandlerFunc{
++				PostReposGitRefsByOwnerByRepo: expectRequestBody(t, map[string]any{
++					"ref": "refs/heads/new-feature",
++					"sha": "0123456789abcdef0123456789abcdef01234567",
++				}).andThen(
++					mockResponse(t, http.StatusCreated, mockCreatedRef),
++				),
++			}),
++			requestArgs: map[string]any{
++				"owner":    "owner",
++				"repo":     "repo",
++				"branch":   "new-feature",
++				"from_sha": "0123456789abcdef0123456789abcdef01234567",
++			},
++			expectError: false,
++			expectedRef: mockCreatedRef,
++		},
++		{
++			name:         "from_sha cannot be combined with from_branch",
++			mockedClient: MockHTTPClientWithHandlers(map[string]http.HandlerFunc{}),
++			requestArgs: map[string]any{
++				"owner":       "owner",
++				"repo":        "repo",
++				"branch":      "new-feature",
++				"from_branch": "main",
++				"from_sha":    "0123456789abcdef0123456789abcdef01234567",
++			},
++			expectError:    true,
++			expectedErrMsg: "from_sha cannot be combined with from_branch",
++		},
++		{
++			name:         "from_sha must be a full commit SHA",
++			mockedClient: MockHTTPClientWithHandlers(map[string]http.HandlerFunc{}),
++			requestArgs: map[string]any{
++				"owner":    "owner",
++				"repo":     "repo",
++				"branch":   "new-feature",
++				"from_sha": "abc123",
++			},
++			expectError:    true,
++			expectedErrMsg: "from_sha must be a full 40-character commit SHA",
++		},
+ 		{
+ 			name: "fail to get repository",
+ 			mockedClient: MockHTTPClientWithHandlers(map[string]http.HandlerFunc{
+@@ -3002,6 +3047,7 @@ func Test_PushFiles(t *testing.T) {
+ 	assert.Contains(t, schema.Properties, "branch")
+ 	assert.Contains(t, schema.Properties, "files")
+ 	assert.Contains(t, schema.Properties, "message")
++	assert.Contains(t, schema.Properties, "create_branch")
+ 	assert.ElementsMatch(t, schema.Required, []string{"owner", "repo", "branch", "files", "message"})
+ 
+ 	// Setup mock objects
+@@ -3197,22 +3243,45 @@ func Test_PushFiles(t *testing.T) {
+ 			expectedErrMsg: "each file must have content",
+ 		},
+ 		{
+-			name: "fails to get branch reference",
++			name: "fails when the branch does not exist and create_branch is not set",
++			mockedClient: NewMockedHTTPClient(
++				WithRequestMatchHandler(
++					GetReposGitRefByOwnerByRepoByRef,
++					mockResponse(t, http.StatusNotFound, nil),
++				),
++			),
++			requestArgs: map[string]any{
++				"owner":  "owner",
++				"repo":   "repo",
++				"branch": "non-existent-branch",
++				"files": []any{
++					map[string]any{
++						"path":    "README.md",
++						"content": "# README",
++					},
++				},
++				"message": "Update file",
++			},
++			expectError:    false,
++			expectedErrMsg: `branch "non-existent-branch" does not exist; set create_branch to true to create it from the default branch`,
++		},
++		{
++			name: "fails to resolve the default branch for a new branch",
+ 			mockedClient: NewMockedHTTPClient(
+ 				WithRequestMatchHandler(
+ 					GetReposGitRefByOwnerByRepoByRef,
+ 					mockResponse(t, http.StatusNotFound, nil),
+ 				),
+-				// Mock Repositories.Get to fail when trying to create branch from default
+ 				WithRequestMatchHandler(
+ 					GetReposByOwnerByRepo,
+ 					mockResponse(t, http.StatusNotFound, nil),
+ 				),
+ 			),
+ 			requestArgs: map[string]any{
+-				"owner":  "owner",
+-				"repo":   "repo",
+-				"branch": "non-existent-branch",
++				"owner":         "owner",
++				"repo":          "repo",
++				"branch":        "non-existent-branch",
++				"create_branch": true,
+ 				"files": []any{
+ 					map[string]any{
+ 						"path":    "README.md",
+@@ -3222,7 +3291,7 @@ func Test_PushFiles(t *testing.T) {
+ 				"message": "Update file",
+ 			},
+ 			expectError:    false,
+-			expectedErrMsg: "failed to create branch from default",
++			expectedErrMsg: "failed to resolve default branch",
+ 		},
+ 		{
+ 			name: "fails to get base commit",
+@@ -3730,6 +3799,95 @@ func Test_PushFiles(t *testing.T) {
+ 	}
+ }
+ 
++func Test_PushFiles_CreateBranch(t *testing.T) {
++	serverTool := PushFiles(translations.NullTranslationHelper)
++
++	defaultRef := &github.Reference{
++		Ref:    new("refs/heads/main"),
++		Object: &github.GitObject{SHA: new("abc123")},
++	}
++	baseCommit := &github.Commit{
++		SHA:  new("abc123"),
++		Tree: &github.Tree{SHA: new("def456")},
++	}
++	newCommit := &github.Commit{SHA: new("jkl012")}
++	createdRef := &github.Reference{
++		Ref:    new("refs/heads/feature"),
++		Object: &github.GitObject{SHA: new("jkl012")},
++	}
++	args := map[string]any{
++		"owner":         "owner",
++		"repo":          "repo",
++		"branch":        "feature",
++		"create_branch": true,
++		"files": []any{
++			map[string]any{"path": "README.md", "content": "# README"},
++		},
++		"message": "Add README",
++	}
++
++	// getRef reports the feature branch as missing and resolves the default branch.
++	getRef := func(w http.ResponseWriter, r *http.Request) {
++		if strings.HasSuffix(r.URL.Path, "/git/ref/heads/main") {
++			mockResponse(t, http.StatusOK, defaultRef)(w, r)
++			return
++		}
++		mockResponse(t, http.StatusNotFound, nil)(w, r)
++	}
++
++	t.Run("creates the branch at the new commit", func(t *testing.T) {
++		var updatedExistingRef bool
++		client := mustNewGHClient(t, NewMockedHTTPClient(
++			WithRequestMatchHandler(GetReposGitRefByOwnerByRepoByRef, getRef),
++			WithRequestMatch(GetReposByOwnerByRepo, &github.Repository{DefaultBranch: new("main")}),
++			WithRequestMatch(GetReposGitCommitsByOwnerByRepoByCommitSHA, baseCommit),
++			WithRequestMatchHandler(PostReposGitTreesByOwnerByRepo, mockResponse(t, http.StatusCreated, &github.Tree{SHA: new("ghi789")})),
++			WithRequestMatchHandler(PostReposGitCommitsByOwnerByRepo, mockResponse(t, http.StatusCreated, newCommit)),
++			WithRequestMatchHandler(PostReposGitRefsByOwnerByRepo, expectRequestBody(t, map[string]any{
++				"ref": "refs/heads/feature",
++				"sha": "jkl012",
++			}).andThen(mockResponse(t, http.StatusCreated, createdRef))),
++			WithRequestMatchHandler(PatchReposGitRefsByOwnerByRepoByRef, func(w http.ResponseWriter, _ *http.Request) {
++				updatedExistingRef = true
++				w.WriteHeader(http.StatusInternalServerError)
++			}),
++		))
++		deps := BaseDeps{Client: client}
++		request := createMCPRequest(args)
++		result, err := serverTool.Handler(deps)(ContextWithDeps(context.Background(), deps), &request)
++		require.NoError(t, err)
++		require.False(t, result.IsError, getTextResult(t, result).Text)
++		assert.False(t, updatedExistingRef, "the default branch must not be moved")
++
++		var returnedRef github.Reference
++		require.NoError(t, json.Unmarshal([]byte(getTextResult(t, result).Text), &returnedRef))
++		assert.Equal(t, "refs/heads/feature", returnedRef.GetRef())
++		assert.Equal(t, "jkl012", returnedRef.GetObject().GetSHA())
++	})
++
++	t.Run("leaves no branch behind when the commit fails", func(t *testing.T) {
++		var createdBranch bool
++		client := mustNewGHClient(t, NewMockedHTTPClient(
++			WithRequestMatchHandler(GetReposGitRefByOwnerByRepoByRef, getRef),
++			WithRequestMatch(GetReposByOwnerByRepo, &github.Repository{DefaultBranch: new("main")}),
++			WithRequestMatch(GetReposGitCommitsByOwnerByRepoByCommitSHA, baseCommit),
++			WithRequestMatchHandler(PostReposGitTreesByOwnerByRepo, mockResponse(t, http.StatusCreated, &github.Tree{SHA: new("ghi789")})),
++			WithRequestMatchHandler(PostReposGitCommitsByOwnerByRepo, mockResponse(t, http.StatusInternalServerError, nil)),
++			WithRequestMatchHandler(PostReposGitRefsByOwnerByRepo, func(w http.ResponseWriter, _ *http.Request) {
++				createdBranch = true
++				w.WriteHeader(http.StatusCreated)
++			}),
++		))
++		deps := BaseDeps{Client: client}
++		request := createMCPRequest(args)
++		result, err := serverTool.Handler(deps)(ContextWithDeps(context.Background(), deps), &request)
++		require.NoError(t, err)
++		require.True(t, result.IsError)
++		assert.Contains(t, getErrorResult(t, result).Text, "failed to create commit")
++		assert.False(t, createdBranch, "no branch may be created before the commit exists")
++	})
++}
++
+ func Test_DeleteRepository(t *testing.T) {
+ 	serverTool := DeleteRepository(translations.NullTranslationHelper)
+ 	tool := serverTool.Tool
+@@ -4299,7 +4457,8 @@ func Test_DeleteFile(t *testing.T) {
+ 	assert.Contains(t, schema.Properties, "path")
+ 	assert.Contains(t, schema.Properties, "message")
+ 	assert.Contains(t, schema.Properties, "branch")
+-	// SHA is no longer required since we're using Git Data API
++	assert.Contains(t, schema.Properties, "sha")
++	// SHA is optional: it is only a precondition on the file being deleted
+ 	assert.ElementsMatch(t, schema.Required, []string{"owner", "repo", "path", "message", "branch"})
+ 
+ 	// Setup mock objects for Git Data API
+@@ -4348,6 +4507,11 @@ func Test_DeleteFile(t *testing.T) {
+ 					GetReposGitCommitsByOwnerByRepoByCommitSHA,
+ 					mockCommit,
+ 				),
++				// Look up the path in the commit's tree
++				WithRequestMatchHandler(
++					GetReposGitTreesByOwnerByRepoByTree,
++					deleteFileTreeHandler(t),
++				),
+ 				// Create tree
+ 				WithRequestMatchHandler(
+ 					PostReposGitTreesByOwnerByRepo,
+@@ -4467,6 +4631,97 @@ func Test_DeleteFile(t *testing.T) {
+ 	}
+ }
+ 
++// deleteFileTreeHandler serves a commit tree (def456) holding a docs
++// directory (tree111) that contains example.md (blob222).
++func deleteFileTreeHandler(t *testing.T) http.HandlerFunc {
++	return func(w http.ResponseWriter, r *http.Request) {
++		switch {
++		case strings.HasSuffix(r.URL.Path, "/git/trees/def456"):
++			mockResponse(t, http.StatusOK, &github.Tree{
++				SHA: new("def456"),
++				Entries: []*github.TreeEntry{
++					{Path: new("docs"), Type: new("tree"), Mode: new("040000"), SHA: new("1111111111111111111111111111111111111111")},
++				},
++			})(w, r)
++		case strings.HasSuffix(r.URL.Path, "/git/trees/1111111111111111111111111111111111111111"):
++			mockResponse(t, http.StatusOK, &github.Tree{
++				SHA: new("1111111111111111111111111111111111111111"),
++				Entries: []*github.TreeEntry{
++					{Path: new("example.md"), Type: new("blob"), Mode: new("100644"), SHA: new("2222222222222222222222222222222222222222")},
++				},
++			})(w, r)
++		default:
++			w.WriteHeader(http.StatusNotFound)
++		}
++	}
++}
++
++func Test_DeleteFile_Preconditions(t *testing.T) {
++	serverTool := DeleteFile(translations.NullTranslationHelper)
++
++	mockRef := &github.Reference{
++		Ref:    new("refs/heads/main"),
++		Object: &github.GitObject{SHA: new("abc123")},
++	}
++	mockCommit := &github.Commit{
++		SHA:  new("abc123"),
++		Tree: &github.Tree{SHA: new("def456")},
++	}
++
++	tests := []struct {
++		name           string
++		path           string
++		sha            string
++		expectedErrMsg string
++	}{
++		{
++			name:           "refuses a directory path",
++			path:           "docs",
++			expectedErrMsg: `path "docs" is a directory; delete_file only deletes a single file`,
++		},
++		{
++			name:           "refuses a missing file",
++			path:           "docs/missing.md",
++			expectedErrMsg: `file "docs/missing.md" does not exist on branch "main"`,
++		},
++		{
++			name:           "refuses when the file changed since it was read",
++			path:           "docs/example.md",
++			sha:            "3333333333333333333333333333333333333333",
++			expectedErrMsg: `file "docs/example.md" has changed on branch "main": its SHA is 2222222222222222222222222222222222222222, not 3333333333333333333333333333333333333333`,
++		},
++	}
++
++	for _, tc := range tests {
++		t.Run(tc.name, func(t *testing.T) {
++			// No tree, commit or ref writes are mocked: reaching one fails the test.
++			client := mustNewGHClient(t, NewMockedHTTPClient(
++				WithRequestMatch(GetReposGitRefByOwnerByRepoByRef, mockRef),
++				WithRequestMatch(GetReposGitCommitsByOwnerByRepoByCommitSHA, mockCommit),
++				WithRequestMatchHandler(GetReposGitTreesByOwnerByRepoByTree, deleteFileTreeHandler(t)),
++			))
++			deps := BaseDeps{Client: client}
++			handler := serverTool.Handler(deps)
++
++			args := map[string]any{
++				"owner":   "owner",
++				"repo":    "repo",
++				"path":    tc.path,
++				"message": "Delete file",
++				"branch":  "main",
++			}
++			if tc.sha != "" {
++				args["sha"] = tc.sha
++			}
++			request := createMCPRequest(args)
++			result, err := handler(ContextWithDeps(context.Background(), deps), &request)
++			require.NoError(t, err)
++			require.True(t, result.IsError)
++			assert.Equal(t, tc.expectedErrMsg, getErrorResult(t, result).Text)
++		})
++	}
++}
++
+ func Test_ListTags(t *testing.T) {
+ 	// Verify tool definition once
+ 	serverTool := ListTags(translations.NullTranslationHelper)
+diff --git a/pkg/github/repository_tool_types.go b/pkg/github/repository_tool_types.go
+index 4f3b584..7295bb8 100644
+--- a/pkg/github/repository_tool_types.go
++++ b/pkg/github/repository_tool_types.go
+@@ -57,6 +57,7 @@ type DeleteFileInput struct {
+ 	Path    string `json:"path"`
+ 	Message string `json:"message"`
+ 	Branch  string `json:"branch"`
++	SHA     string `json:"sha,omitempty"`
+ }
+ 
+ type CreateBranchInput struct {
+@@ -64,6 +65,7 @@ type CreateBranchInput struct {
+ 	Repo       string `json:"repo"`
+ 	Branch     string `json:"branch"`
+ 	FromBranch string `json:"from_branch,omitempty"`
++	FromSHA    string `json:"from_sha,omitempty"`
+ }
+ 
+ type PushFileInput struct {
+@@ -72,11 +74,12 @@ type PushFileInput struct {
+ }
+ 
+ type PushFilesInput struct {
+-	Owner   string          `json:"owner"`
+-	Repo    string          `json:"repo"`
+-	Branch  string          `json:"branch"`
+-	Message string          `json:"message"`
+-	Files   []PushFileInput `json:"files"`
++	Owner        string          `json:"owner"`
++	Repo         string          `json:"repo"`
++	Branch       string          `json:"branch"`
++	Message      string          `json:"message"`
++	Files        []PushFileInput `json:"files"`
++	CreateBranch bool            `json:"create_branch,omitempty"`
+ }
+ 
+ type RepositoryTagInput struct {
+diff --git a/pkg/github/typed_consolidated_issue_outputs_test.go b/pkg/github/typed_consolidated_issue_outputs_test.go
+index 1bf784e..1a5b160 100644
+--- a/pkg/github/typed_consolidated_issue_outputs_test.go
++++ b/pkg/github/typed_consolidated_issue_outputs_test.go
+@@ -265,7 +265,7 @@ func TestTypedConsolidatedIssueOutputs(t *testing.T) {
+ 		{"issue_read", map[string]any{"method": "get_labels", "issue_number": 1}, `{"labels":[{"color":"red","description":"Bug","id":"L_1","name":"bug"}],"totalCount":1}`},
+ 		{"issue_read", map[string]any{"method": "get_labels", "issue_number": 2}, `{"labels":[],"totalCount":0}`},
+ 		{"issue_write", map[string]any{"method": "create", "title": "Subject"}, mutationText},
+-		{"issue_write", map[string]any{"method": "update", "issue_number": "1.0"}, mutationText},
++		{"issue_write", map[string]any{"method": "update", "issue_number": "1.0", "title": "Updated"}, mutationText},
+ 		{"issue_write", map[string]any{"method": "update", "issue_number": "1", "state": "open"}, mutationText},
+ 		{"issue_write", map[string]any{"method": "update", "issue_number": 1, "state": "closed", "state_reason": "completed"}, mutationText},
+ 		{"issue_write", map[string]any{"method": "update", "issue_number": 1, "state": "closed", "state_reason": "not_planned"}, mutationText},
+@@ -639,9 +639,7 @@ func TestTypedIssueWriteMutationOptionalityAndFields(t *testing.T) {
+ 				args map[string]any
+ 				body string
+ 			}{
+-				{map[string]any{}, `{}`},
+ 				{map[string]any{"labels": []string{}, "assignees": []string{}, "type": nil, "milestone": "0"}, `{"labels":[],"assignees":[],"type":null}`},
+-				{map[string]any{"labels": nil, "assignees": nil}, `{}`},
+ 				{map[string]any{"labels": []string{"bug"}, "assignees": []string{"octo"}, "type": "Bug", "milestone": "2.0"}, `{"labels":["bug"],"assignees":["octo"],"type":"Bug","milestone":2}`},
+ 				{map[string]any{"issue_fields": []any{
+ 					map[string]any{"field_name": "Number", "value": 0},
+@@ -674,6 +672,15 @@ func TestTypedIssueWriteMutationOptionalityAndFields(t *testing.T) {
+ 			}, resultText)
+ 			assert.JSONEq(t, `{}`, requestBody)
+ 			assert.Equal(t, []string{"/repos/owner/repo/issues/1/issue-field-values/1"}, deleted)
++			// An update that would change nothing fails instead of reporting success.
++			for _, noChanges := range []map[string]any{{}, {"labels": nil, "assignees": nil}} {
++				args := map[string]any{"method": "update", "owner": "owner", "repo": "repo", "issue_number": "1"}
++				maps.Copy(args, noChanges)
++				result, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "issue_write", Arguments: args})
++				require.NoError(t, err)
++				require.True(t, result.IsError)
++				assert.Contains(t, getErrorResult(t, result).Text, "no changes requested")
++			}
+ 			for _, fields := range []any{
+ 				[]any{map[string]any{"field_name": "Missing", "value": "value"}},
+ 				[]any{map[string]any{"field_name": "Text", "field_option_name": "High"}},
+diff --git a/pkg/github/typed_repository_outputs_test.go b/pkg/github/typed_repository_outputs_test.go
+index 672837c..145320a 100644
+--- a/pkg/github/typed_repository_outputs_test.go
++++ b/pkg/github/typed_repository_outputs_test.go
+@@ -161,6 +161,8 @@ func typedRepositoryDeps(t *testing.T) BaseDeps {
+ 		},
+ 		"GET /repos/{owner}/{repo}/git/trees/{tree_sha}": mockResponse(t, http.StatusOK, &github.Tree{Entries: []*github.TreeEntry{{
+ 			Path: new("nested/missing"), Type: new("blob"),
++		}, {
++			Path: new("file"), Type: new("blob"), Mode: new("100644"), SHA: new(strings.Repeat("b", 40)),
+ 		}}}),
+ 		"POST /repos/{owner}/{repo}/forks": func(w http.ResponseWriter, r *http.Request) {
+ 			var body github.RepositoryCreateForkOptions
+-- 
+2.50.1 (Apple Git-155)
+

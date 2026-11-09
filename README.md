@@ -1,3 +1,8 @@
+> **GitHub MCP server write-path experiment (unofficial).** This repository is an independent
+> research build by [IsoKron](https://isokron.ai) based on `github/github-mcp-server` v2.1.0. It is
+> not affiliated with or endorsed by GitHub and is not a supported distribution. Read
+> [EXPERIMENT.md](EXPERIMENT.md) first; the upstream README follows unchanged.
+
 [![Go Report Card](https://goreportcard.com/badge/github.com/github/github-mcp-server/v2)](https://goreportcard.com/report/github.com/github/github-mcp-server/v2)
 
 # GitHub MCP Server

@@ -1,0 +1,639 @@
+From 0885e000441c00cc32fd7a5f9a1466cb6fb20ed1 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 9 Nov 2026 12:50:51 -0700
+Subject: [PATCH 5/8] feat: report number and html_url from write tools; expose
+ review comment IDs
+
+Create and update results for issues, pull requests and their comments
+carry the issue or pull request number and the browser URL, so agents
+no longer parse URLs or read the object back. A comment's number is
+its issue or pull request.
+
+pull_request_read get_review_comments now returns each comment's
+numeric id, which is what add_reply_to_pull_request_comment takes as
+commentId.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QV62ZkZa646Swi2zdbdnXN
+---
+ pkg/github/consolidated_pull_request_types.go |  3 +-
+ pkg/github/issue_labels.go                    |  6 ++-
+ pkg/github/issue_tool_types.go                |  4 ++
+ pkg/github/issues.go                          | 39 ++++++++++++-------
+ pkg/github/issues_granular.go                 | 36 +++++++++++------
+ pkg/github/minimal_types.go                   |  7 ++++
+ pkg/github/pullrequests.go                    | 21 ++++++----
+ pkg/github/pullrequests_granular.go           | 12 ++++--
+ pkg/github/pullrequests_test.go               | 17 +++++++-
+ .../typed_consolidated_issue_outputs_test.go  |  8 ++--
+ ..._consolidated_pull_request_outputs_test.go | 14 +++----
+ .../typed_granular_issue_outputs_test.go      |  6 +--
+ ...yped_granular_pull_request_outputs_test.go |  4 +-
+ pkg/github/typed_issue_outputs_test.go        |  8 ++--
+ 14 files changed, 124 insertions(+), 61 deletions(-)
+
+diff --git a/pkg/github/consolidated_pull_request_types.go b/pkg/github/consolidated_pull_request_types.go
+index 6d6abae..79067d8 100644
+--- a/pkg/github/consolidated_pull_request_types.go
++++ b/pkg/github/consolidated_pull_request_types.go
+@@ -208,11 +208,12 @@ func pullRequestWriteOutputSchema() *jsonschema.Schema {
+ // Reactions have no browser URL; their API endpoint is not useful output.
+ type PullRequestMutationReference struct {
+ 	ID      string `json:"id"`
++	Number  int    `json:"number,omitempty"`
+ 	HTMLURL string `json:"html_url,omitempty"`
+ }
+ 
+ func pullRequestMutationReference(response MinimalResponse) *PullRequestMutationReference {
+-	return &PullRequestMutationReference{ID: response.ID, HTMLURL: response.URL}
++	return &PullRequestMutationReference{ID: response.ID, Number: response.Number, HTMLURL: response.URL}
+ }
+ 
+ func pullRequestFormArguments(req *mcp.CallToolRequest, args map[string]any) (map[string]any, error) {
+diff --git a/pkg/github/issue_labels.go b/pkg/github/issue_labels.go
+index 1024ee4..e9d88da 100644
+--- a/pkg/github/issue_labels.go
++++ b/pkg/github/issue_labels.go
+@@ -96,7 +96,8 @@ func AddIssueLabels(t translations.TranslationHelperFunc) inventory.ServerTool {
+ 				DestructiveHint: new(false),
+ 				IdempotentHint:  true,
+ 			},
+-			InputSchema: issueLabelsChangeSchema("Label names to add"),
++			InputSchema:  issueLabelsChangeSchema("Label names to add"),
++			OutputSchema: issueDTOschema[IssueLabelsChangeOutput](),
+ 		},
+ 		publicRepositoryWriteScopeAccess(),
+ 		func(ctx context.Context, deps ToolDependencies, _ *mcp.CallToolRequest, input IssueLabelsChangeInput) (*mcp.CallToolResult, *IssueLabelsChangeOutput, error) {
+@@ -134,7 +135,8 @@ func RemoveIssueLabels(t translations.TranslationHelperFunc) inventory.ServerToo
+ 				DestructiveHint: new(true),
+ 				IdempotentHint:  true,
+ 			},
+-			InputSchema: issueLabelsChangeSchema("Label names to remove"),
++			InputSchema:  issueLabelsChangeSchema("Label names to remove"),
++			OutputSchema: issueDTOschema[IssueLabelsChangeOutput](),
+ 		},
+ 		publicRepositoryWriteScopeAccess(),
+ 		func(ctx context.Context, deps ToolDependencies, _ *mcp.CallToolRequest, input IssueLabelsChangeInput) (*mcp.CallToolResult, *IssueLabelsChangeOutput, error) {
+diff --git a/pkg/github/issue_tool_types.go b/pkg/github/issue_tool_types.go
+index 97d000c..c2b70eb 100644
+--- a/pkg/github/issue_tool_types.go
++++ b/pkg/github/issue_tool_types.go
+@@ -77,6 +77,7 @@ type UpdateIssueCommentInput struct {
+ 
+ type IssueCommentOutput struct {
+ 	ID      string `json:"id"`
++	Number  int    `json:"number,omitempty"`
+ 	HTMLURL string `json:"html_url,omitempty"`
+ }
+ 
+@@ -180,6 +181,9 @@ func issueCommentOutputObjectSchema(includeURL bool) *jsonschema.Schema {
+ 			Type: "string", Description: "The web URL of the created issue comment.",
+ 		}
+ 		required = append(required, "html_url")
++		properties["number"] = &jsonschema.Schema{
++			Type: "integer", Description: "The number of the issue or pull request the comment is on.",
++		}
+ 	}
+ 	return &jsonschema.Schema{
+ 		Type: "object", Properties: properties, Required: required,
+diff --git a/pkg/github/issues.go b/pkg/github/issues.go
+index 625c69d..f3394cc 100644
+--- a/pkg/github/issues.go
++++ b/pkg/github/issues.go
+@@ -1468,8 +1468,10 @@ func AddIssueComment(t translations.TranslationHelperFunc) inventory.ServerTool
+ 				}
+ 
+ 				commentResponse = &MinimalResponse{
+-					ID:  fmt.Sprintf("%d", createdComment.GetID()),
+-					URL: createdComment.GetHTMLURL(),
++					ID:      fmt.Sprintf("%d", createdComment.GetID()),
++					URL:     createdComment.GetHTMLURL(),
++					Number:  issueNumber,
++					HTMLURL: createdComment.GetHTMLURL(),
+ 				}
+ 			}
+ 
+@@ -1481,7 +1483,7 @@ func AddIssueComment(t translations.TranslationHelperFunc) inventory.ServerTool
+ 					Comment: *commentResponse, Reaction: *reactionResponse,
+ 				}
+ 				result.Combined = &IssueCommentAndReactionOutput{
+-					Comment:  IssueCommentOutput{ID: commentResponse.ID, HTMLURL: commentResponse.URL},
++					Comment:  IssueCommentOutput{ID: commentResponse.ID, HTMLURL: commentResponse.URL, Number: commentResponse.Number},
+ 					Reaction: IssueReactionOutput{ID: reactionResponse.ID},
+ 				}
+ 			case hasReaction:
+@@ -1490,7 +1492,7 @@ func AddIssueComment(t translations.TranslationHelperFunc) inventory.ServerTool
+ 			default:
+ 				legacyResult.Single = commentResponse
+ 				if commentResponse != nil {
+-					result.Single = &IssueCommentOutput{ID: commentResponse.ID, HTMLURL: commentResponse.URL}
++					result.Single = &IssueCommentOutput{ID: commentResponse.ID, HTMLURL: commentResponse.URL, Number: commentResponse.Number}
+ 				}
+ 			}
+ 
+@@ -1580,11 +1582,15 @@ func UpdateIssueComment(t translations.TranslationHelperFunc) inventory.ServerTo
+ 				return ghErrors.NewGitHubAPIErrorResponse(ctx, "failed to update issue comment", resp, err), nil, nil
+ 			}
+ 
++			// The issue number is informational, so an unparsable issue URL leaves it out.
++			issueNumber, _ := issueNumberFromIssueURL(updatedComment.GetIssueURL())
+ 			legacyOutput := &MinimalResponse{
+-				ID:  fmt.Sprintf("%d", updatedComment.GetID()),
+-				URL: updatedComment.GetHTMLURL(),
++				ID:      fmt.Sprintf("%d", updatedComment.GetID()),
++				URL:     updatedComment.GetHTMLURL(),
++				Number:  issueNumber,
++				HTMLURL: updatedComment.GetHTMLURL(),
+ 			}
+-			output := &IssueCommentOutput{ID: legacyOutput.ID, HTMLURL: legacyOutput.URL}
++			output := &IssueCommentOutput{ID: legacyOutput.ID, HTMLURL: legacyOutput.URL, Number: issueNumber}
+ 			r, err := json.Marshal(legacyOutput)
+ 			if err != nil {
+ 				return utils.NewToolResultErrorFromErr("failed to marshal response", err), nil, nil
+@@ -2961,6 +2967,7 @@ type createIssueMutation struct {
+ 	CreateIssue struct {
+ 		Issue struct {
+ 			FullDatabaseID githubv4.String `graphql:"fullDatabaseId"`
++			Number         githubv4.Int
+ 			URL            githubv4.URI
+ 		}
+ 	} `graphql:"createIssue(input: $input)"`
+@@ -3072,8 +3079,10 @@ func createIssueWithParent(ctx context.Context, client *github.Client, gqlClient
+ 	}
+ 
+ 	response := MinimalResponse{
+-		ID:  string(mutation.CreateIssue.Issue.FullDatabaseID),
+-		URL: mutation.CreateIssue.Issue.URL.String(),
++		ID:      string(mutation.CreateIssue.Issue.FullDatabaseID),
++		URL:     mutation.CreateIssue.Issue.URL.String(),
++		Number:  int(mutation.CreateIssue.Issue.Number),
++		HTMLURL: mutation.CreateIssue.Issue.URL.String(),
+ 	}
+ 	encoded, err := json.Marshal(response)
+ 	if err != nil {
+@@ -3284,8 +3293,10 @@ func createIssue(ctx context.Context, client *github.Client, owner string, repo
+ 
+ 	// Return minimal response with just essential information
+ 	minimalResponse := MinimalResponse{
+-		ID:  fmt.Sprintf("%d", issue.GetID()),
+-		URL: issue.GetHTMLURL(),
++		ID:      fmt.Sprintf("%d", issue.GetID()),
++		URL:     issue.GetHTMLURL(),
++		Number:  issue.GetNumber(),
++		HTMLURL: issue.GetHTMLURL(),
+ 	}
+ 
+ 	r, err := json.Marshal(minimalResponse)
+@@ -3457,8 +3468,10 @@ func updateIssue(ctx context.Context, client *github.Client, gqlClient *githubv4
+ 
+ 	// Return minimal response with just essential information
+ 	minimalResponse := MinimalResponse{
+-		ID:  fmt.Sprintf("%d", updatedIssue.GetID()),
+-		URL: updatedIssue.GetHTMLURL(),
++		ID:      fmt.Sprintf("%d", updatedIssue.GetID()),
++		URL:     updatedIssue.GetHTMLURL(),
++		Number:  updatedIssue.GetNumber(),
++		HTMLURL: updatedIssue.GetHTMLURL(),
+ 	}
+ 
+ 	r, err := json.Marshal(minimalResponse)
+diff --git a/pkg/github/issues_granular.go b/pkg/github/issues_granular.go
+index eab4a20..74b0f74 100644
+--- a/pkg/github/issues_granular.go
++++ b/pkg/github/issues_granular.go
+@@ -87,8 +87,10 @@ func issueUpdateTool[In interface {
+ 			defer func() { _ = resp.Body.Close() }()
+ 
+ 			return granularIssueMinimalResult(&MinimalResponse{
+-				ID:  fmt.Sprintf("%d", issue.GetID()),
+-				URL: issue.GetHTMLURL(),
++				ID:      fmt.Sprintf("%d", issue.GetID()),
++				URL:     issue.GetHTMLURL(),
++				Number:  issue.GetNumber(),
++				HTMLURL: issue.GetHTMLURL(),
+ 			})
+ 		},
+ 		normalizer,
+@@ -181,8 +183,10 @@ func GranularCreateIssue(t translations.TranslationHelperFunc) inventory.ServerT
+ 			defer func() { _ = resp.Body.Close() }()
+ 
+ 			return granularIssueMinimalResult(&MinimalResponse{
+-				ID:  fmt.Sprintf("%d", issue.GetID()),
+-				URL: issue.GetHTMLURL(),
++				ID:      fmt.Sprintf("%d", issue.GetID()),
++				URL:     issue.GetHTMLURL(),
++				Number:  issue.GetNumber(),
++				HTMLURL: issue.GetHTMLURL(),
+ 			})
+ 		},
+ 		granularIssueInputNormalizer(normalizeGranularCreateIssueArguments),
+@@ -318,8 +322,10 @@ func GranularUpdateIssueAssignees(t translations.TranslationHelperFunc) inventor
+ 			defer func() { _ = resp.Body.Close() }()
+ 
+ 			return granularIssueMinimalResult(&MinimalResponse{
+-				ID:  fmt.Sprintf("%d", issue.GetID()),
+-				URL: issue.GetHTMLURL(),
++				ID:      fmt.Sprintf("%d", issue.GetID()),
++				URL:     issue.GetHTMLURL(),
++				Number:  issue.GetNumber(),
++				HTMLURL: issue.GetHTMLURL(),
+ 			})
+ 		},
+ 		granularIssueInputNormalizer(normalizeGranularUpdateIssueAssigneesArguments),
+@@ -453,8 +459,10 @@ func GranularUpdateIssueLabels(t translations.TranslationHelperFunc) inventory.S
+ 			defer func() { _ = resp.Body.Close() }()
+ 
+ 			return granularIssueMinimalResult(&MinimalResponse{
+-				ID:  fmt.Sprintf("%d", issue.GetID()),
+-				URL: issue.GetHTMLURL(),
++				ID:      fmt.Sprintf("%d", issue.GetID()),
++				URL:     issue.GetHTMLURL(),
++				Number:  issue.GetNumber(),
++				HTMLURL: issue.GetHTMLURL(),
+ 			})
+ 		},
+ 		granularIssueInputNormalizer(normalizeGranularUpdateIssueLabelsArguments),
+@@ -596,8 +604,10 @@ func GranularUpdateIssueType(t translations.TranslationHelperFunc) inventory.Ser
+ 			defer func() { _ = resp.Body.Close() }()
+ 
+ 			return granularIssueMinimalResult(&MinimalResponse{
+-				ID:  fmt.Sprintf("%d", issue.GetID()),
+-				URL: issue.GetHTMLURL(),
++				ID:      fmt.Sprintf("%d", issue.GetID()),
++				URL:     issue.GetHTMLURL(),
++				Number:  issue.GetNumber(),
++				HTMLURL: issue.GetHTMLURL(),
+ 			})
+ 		},
+ 		granularIssueInputNormalizer(normalizeGranularUpdateIssueTypeArguments),
+@@ -741,8 +751,10 @@ func GranularUpdateIssueState(t translations.TranslationHelperFunc) inventory.Se
+ 			defer func() { _ = resp.Body.Close() }()
+ 
+ 			return granularIssueMinimalResult(&MinimalResponse{
+-				ID:  fmt.Sprintf("%d", issue.GetID()),
+-				URL: issue.GetHTMLURL(),
++				ID:      fmt.Sprintf("%d", issue.GetID()),
++				URL:     issue.GetHTMLURL(),
++				Number:  issue.GetNumber(),
++				HTMLURL: issue.GetHTMLURL(),
+ 			})
+ 		},
+ 		granularIssueInputNormalizer(normalizeGranularUpdateIssueStateArguments),
+diff --git a/pkg/github/minimal_types.go b/pkg/github/minimal_types.go
+index d355eb1..e7c283b 100644
+--- a/pkg/github/minimal_types.go
++++ b/pkg/github/minimal_types.go
+@@ -418,6 +418,10 @@ type MinimalWorkflowJobsResult struct {
+ type MinimalResponse struct {
+ 	ID  string `json:"id"`
+ 	URL string `json:"url"`
++	// Number and HTMLURL are set for issues, pull requests and their comments
++	// (for a comment, Number is its issue or pull request).
++	Number  int    `json:"number,omitempty"`
++	HTMLURL string `json:"html_url,omitempty"`
+ }
+ 
+ // MinimalCollaborator is the trimmed output type for repository collaborators.
+@@ -1947,6 +1951,8 @@ type MinimalPageInfo struct {
+ 
+ // MinimalReviewComment is the trimmed output type for PR review comment objects.
+ type MinimalReviewComment struct {
++	// ID is the numeric comment ID that add_reply_to_pull_request_comment takes as commentId.
++	ID                int64  `json:"id,omitempty"`
+ 	Body              string `json:"body,omitempty"`
+ 	Path              string `json:"path"`
+ 	Line              *int   `json:"line,omitempty"`
+@@ -2285,6 +2291,7 @@ func convertToMinimalReviewThread(thread reviewThreadNode) MinimalReviewThread {
+ 
+ func convertToMinimalReviewComment(c reviewCommentNode) MinimalReviewComment {
+ 	m := MinimalReviewComment{
++		ID:      parseFullDatabaseID(string(c.FullDatabaseID)),
+ 		Body:    sanitize.Content(string(c.Body)),
+ 		Path:    string(c.Path),
+ 		Author:  string(c.Author.Login),
+diff --git a/pkg/github/pullrequests.go b/pkg/github/pullrequests.go
+index 70fdfa1..531bb2d 100644
+--- a/pkg/github/pullrequests.go
++++ b/pkg/github/pullrequests.go
+@@ -501,6 +501,7 @@ type reviewThreadNode struct {
+ 
+ type reviewCommentNode struct {
+ 	ID                githubv4.ID
++	FullDatabaseID    githubv4.String `graphql:"fullDatabaseId"`
+ 	Body              githubv4.String
+ 	Path              githubv4.String
+ 	Line              *githubv4.Int
+@@ -902,8 +903,10 @@ func CreatePullRequest(t translations.TranslationHelperFunc) inventory.ServerToo
+ 
+ 			// Return minimal response with just essential information
+ 			minimalResponse := MinimalResponse{
+-				ID:  fmt.Sprintf("%d", pr.GetID()),
+-				URL: pr.GetHTMLURL(),
++				ID:      fmt.Sprintf("%d", pr.GetID()),
++				URL:     pr.GetHTMLURL(),
++				Number:  pr.GetNumber(),
++				HTMLURL: pr.GetHTMLURL(),
+ 			}
+ 
+ 			r, err := json.Marshal(minimalResponse)
+@@ -1226,8 +1229,10 @@ func UpdatePullRequest(t translations.TranslationHelperFunc) inventory.ServerToo
+ 
+ 			// Return minimal response with just essential information
+ 			minimalResponse := MinimalResponse{
+-				ID:  fmt.Sprintf("%d", finalPR.GetID()),
+-				URL: finalPR.GetHTMLURL(),
++				ID:      fmt.Sprintf("%d", finalPR.GetID()),
++				URL:     finalPR.GetHTMLURL(),
++				Number:  finalPR.GetNumber(),
++				HTMLURL: finalPR.GetHTMLURL(),
+ 			}
+ 
+ 			r, err := json.Marshal(minimalResponse)
+@@ -1260,7 +1265,7 @@ func AddReplyToPullRequestComment(t translations.TranslationHelperFunc) inventor
+ 			},
+ 			"commentId": {
+ 				Type:        "number",
+-				Description: "The numeric ID of the pull request review comment to reply or react to. Use the number from a #discussion_r... anchor, not the GraphQL thread node ID (PRRT_...).",
++				Description: "The numeric ID of the pull request review comment to reply or react to: the comment's id from pull_request_read get_review_comments, or the number from a #discussion_r... anchor. Not the GraphQL thread node ID (PRRT_...).",
+ 				Minimum:     new(1.0),
+ 			},
+ 			"body": {
+@@ -1370,8 +1375,10 @@ func AddReplyToPullRequestComment(t translations.TranslationHelperFunc) inventor
+ 				}
+ 
+ 				commentResponse = &MinimalResponse{
+-					ID:  fmt.Sprintf("%d", comment.GetID()),
+-					URL: comment.GetHTMLURL(),
++					ID:      fmt.Sprintf("%d", comment.GetID()),
++					URL:     comment.GetHTMLURL(),
++					Number:  pullNumber,
++					HTMLURL: comment.GetHTMLURL(),
+ 				}
+ 			}
+ 
+diff --git a/pkg/github/pullrequests_granular.go b/pkg/github/pullrequests_granular.go
+index 423a531..f00456e 100644
+--- a/pkg/github/pullrequests_granular.go
++++ b/pkg/github/pullrequests_granular.go
+@@ -106,8 +106,10 @@ func prUpdateTool[In interface {
+ 			defer func() { _ = resp.Body.Close() }()
+ 
+ 			output := &MinimalResponse{
+-				ID:  fmt.Sprintf("%d", pr.GetID()),
+-				URL: pr.GetHTMLURL(),
++				ID:      fmt.Sprintf("%d", pr.GetID()),
++				URL:     pr.GetHTMLURL(),
++				Number:  pr.GetNumber(),
++				HTMLURL: pr.GetHTMLURL(),
+ 			}
+ 			r, err := json.Marshal(output)
+ 			if err != nil {
+@@ -312,8 +314,10 @@ func GranularRequestPullRequestReviewers(t translations.TranslationHelperFunc) i
+ 			defer func() { _ = resp.Body.Close() }()
+ 
+ 			output := &MinimalResponse{
+-				ID:  fmt.Sprintf("%d", pr.GetID()),
+-				URL: pr.GetHTMLURL(),
++				ID:      fmt.Sprintf("%d", pr.GetID()),
++				URL:     pr.GetHTMLURL(),
++				Number:  pr.GetNumber(),
++				HTMLURL: pr.GetHTMLURL(),
+ 			}
+ 			r, err := json.Marshal(output)
+ 			if err != nil {
+diff --git a/pkg/github/pullrequests_test.go b/pkg/github/pullrequests_test.go
+index 5460949..778ab9e 100644
+--- a/pkg/github/pullrequests_test.go
++++ b/pkg/github/pullrequests_test.go
+@@ -2268,6 +2268,7 @@ func Test_GetPullRequestComments(t *testing.T) {
+ 												"nodes": []map[string]any{
+ 													{
+ 														"id":                "PRRC_kwDOA0xdyM4AX1Y0",
++														"fullDatabaseId":    "3000000101",
+ 														"body":              "This looks good",
+ 														"path":              "file1.go",
+ 														"line":              86,
+@@ -2351,6 +2352,7 @@ func Test_GetPullRequestComments(t *testing.T) {
+ 
+ 				// Validate first comment
+ 				comment1 := thread.Comments[0]
++				assert.Equal(t, int64(3000000101), comment1.ID, "the numeric ID add_reply_to_pull_request_comment takes")
+ 				assert.Equal(t, "This looks good", comment1.Body)
+ 				assert.Equal(t, "file1.go", comment1.Path)
+ 				assert.Equal(t, "reviewer1", comment1.Author)
+@@ -2383,6 +2385,8 @@ func Test_GetPullRequestComments(t *testing.T) {
+ 				assert.Equal(t, float64(84), raw.ReviewThreads[0].Comments[0]["original_line"])
+ 				assert.Equal(t, float64(73), raw.ReviewThreads[0].Comments[0]["start_line"])
+ 				assert.Equal(t, float64(73), raw.ReviewThreads[0].Comments[0]["original_start_line"])
++				assert.Equal(t, float64(3000000101), raw.ReviewThreads[0].Comments[0]["id"])
++				assert.NotContains(t, raw.ReviewThreads[0].Comments[1], "id", "an unknown ID is omitted, not reported as 0")
+ 				assert.NotContains(t, raw.ReviewThreads[0].Comments[1], "start_line")
+ 				assert.NotContains(t, raw.ReviewThreads[0].Comments[1], "original_start_line")
+ 				assert.NotContains(t, raw.ReviewThreads[0].Comments[2], "line")
+@@ -4516,6 +4520,15 @@ func TestAddReplyToPullRequestComment(t *testing.T) {
+ 		assert.Equal(t, expectedID, response["id"])
+ 		assert.Equal(t, expectedURL, response["url"])
+ 	}
++	// A reply also reports the pull request number and its browser URL.
++	assertReplyResponse := func(t *testing.T, response map[string]any) {
++		t.Helper()
++		assert.Len(t, response, 4)
++		assert.Equal(t, "456", response["id"])
++		assert.Equal(t, "https://github.com/owner/repo/pull/42#discussion_r456", response["url"])
++		assert.Equal(t, float64(42), response["number"])
++		assert.Equal(t, "https://github.com/owner/repo/pull/42#discussion_r456", response["html_url"])
++	}
+ 
+ 	tests := []struct {
+ 		name               string
+@@ -4741,12 +4754,12 @@ func TestAddReplyToPullRequestComment(t *testing.T) {
+ 				assert.Len(t, response, 2)
+ 				commentResponse, ok := response["comment"].(map[string]any)
+ 				require.True(t, ok)
+-				assertMinimalResponse(t, commentResponse, "456", "https://github.com/owner/repo/pull/42#discussion_r456")
++				assertReplyResponse(t, commentResponse)
+ 				reactionResponse, ok := response["reaction"].(map[string]any)
+ 				require.True(t, ok)
+ 				assertMinimalResponse(t, reactionResponse, "789", reactionURL)
+ 			case hasBody:
+-				assertMinimalResponse(t, response, "456", "https://github.com/owner/repo/pull/42#discussion_r456")
++				assertReplyResponse(t, response)
+ 			default:
+ 				assertMinimalResponse(t, response, "789", reactionURL)
+ 			}
+diff --git a/pkg/github/typed_consolidated_issue_outputs_test.go b/pkg/github/typed_consolidated_issue_outputs_test.go
+index 1a5b160..80cfb62 100644
+--- a/pkg/github/typed_consolidated_issue_outputs_test.go
++++ b/pkg/github/typed_consolidated_issue_outputs_test.go
+@@ -201,7 +201,7 @@ func consolidatedIssueDeps(t *testing.T) BaseDeps {
+ 		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+ 		switch {
+ 		case strings.Contains(req.Query, "createIssue("):
+-			_, _ = w.Write([]byte(`{"data":{"createIssue":{"issue":{"fullDatabaseId":"123","url":"https://github.com/owner/repo/issues/1"}}}}`))
++			_, _ = w.Write([]byte(`{"data":{"createIssue":{"issue":{"fullDatabaseId":"123","number":1,"url":"https://github.com/owner/repo/issues/1"}}}}`))
+ 		case strings.Contains(req.Query, "parentRepository:"):
+ 			_, _ = w.Write([]byte(`{"data":{"childRepository":{"id":"R_1","nameWithOwner":"owner/repo"},"parentRepository":{"issue":{"id":"I_parent","number":7}}}}`))
+ 		case strings.Contains(req.Query, "parent{"):
+@@ -244,7 +244,7 @@ func consolidatedIssueDeps(t *testing.T) BaseDeps {
+ }
+ 
+ func TestTypedConsolidatedIssueOutputs(t *testing.T) {
+-	const mutationText = `{"id":"123","url":"https://github.com/owner/repo/issues/1"}`
++	const mutationText = `{"id":"123","url":"https://github.com/owner/repo/issues/1","number":1,"html_url":"https://github.com/owner/repo/issues/1"}`
+ 	const subText = `{"id":7,"number":7,"title":"Child","body":"body","created_at":"2026-01-01T00:00:00Z","issue_field_values":[{"issue_field_id":11,"node_id":"IF_11","data_type":"number","value":0}]}`
+ 	const subStructured = `{"id":7,"number":7,"title":"Child","body":"body","created_at":"2026-01-01T00:00:00Z","assignees":[],"field_values":[{"issue_field_id":11,"data_type":"number","value":0}]}`
+ 	cases := []struct {
+@@ -366,7 +366,7 @@ func TestTypedIssueWriteAwaitingForm(t *testing.T) {
+ 					assert.Nil(t, result.StructuredContent)
+ 				}
+ 				args["_ui_submitted"] = true
+-				assertConsolidatedResult(t, session, schemas, "issue_write", args, `{"id":"123","url":"https://github.com/owner/repo/issues/1"}`)
++				assertConsolidatedResult(t, session, schemas, "issue_write", args, `{"id":"123","url":"https://github.com/owner/repo/issues/1","number":1,"html_url":"https://github.com/owner/repo/issues/1"}`)
+ 			}
+ 		})
+ 	}
+@@ -581,7 +581,7 @@ func TestTypedIssueCommentsCompactUsersAndLockdown(t *testing.T) {
+ }
+ 
+ func TestTypedIssueWriteMutationOptionalityAndFields(t *testing.T) {
+-	const resultText = `{"id":"123","url":"https://github.com/owner/repo/issues/1"}`
++	const resultText = `{"id":"123","url":"https://github.com/owner/repo/issues/1","number":1,"html_url":"https://github.com/owner/repo/issues/1"}`
+ 	for _, protocol := range []string{inventory.ProtocolVersionMultiRoundTrip, "2025-11-25", ""} {
+ 		t.Run("protocol="+protocol, func(t *testing.T) {
+ 			var requestBody, fieldValuesBody string
+diff --git a/pkg/github/typed_consolidated_pull_request_outputs_test.go b/pkg/github/typed_consolidated_pull_request_outputs_test.go
+index 60afd2f..6597acd 100644
+--- a/pkg/github/typed_consolidated_pull_request_outputs_test.go
++++ b/pkg/github/typed_consolidated_pull_request_outputs_test.go
+@@ -256,13 +256,13 @@ func runTypedPullRequestCases(t *testing.T, session *mcp.ClientSession, schemas
+ 		case tc.tool == "update_pull_request_branch":
+ 			assert.JSONEq(t, `{"message":"Pull request branch update is in progress"}`, mustMarshalJSON(t, value))
+ 		case tc.tool == "create_pull_request" || tc.tool == "update_pull_request":
+-			assert.JSONEq(t, `{"id":"0","html_url":"https://github.com/owner/repo/pull/1"}`, mustMarshalJSON(t, value))
++			assert.JSONEq(t, `{"id":"0","number":1,"html_url":"https://github.com/owner/repo/pull/1"}`, mustMarshalJSON(t, value))
+ 		case tc.tool == "add_reply_to_pull_request_comment":
+ 			switch {
+ 			case tc.args["body"] != nil && tc.args["reaction"] != nil:
+-				assert.JSONEq(t, `{"comment":{"id":"43","html_url":"https://github.com/owner/repo/pull/1#discussion_r43"},"reaction":{"id":"77"}}`, mustMarshalJSON(t, value))
++				assert.JSONEq(t, `{"comment":{"id":"43","number":1,"html_url":"https://github.com/owner/repo/pull/1#discussion_r43"},"reaction":{"id":"77"}}`, mustMarshalJSON(t, value))
+ 			case tc.args["body"] != nil:
+-				assert.JSONEq(t, `{"id":"43","html_url":"https://github.com/owner/repo/pull/1#discussion_r43"}`, mustMarshalJSON(t, value))
++				assert.JSONEq(t, `{"id":"43","number":1,"html_url":"https://github.com/owner/repo/pull/1#discussion_r43"}`, mustMarshalJSON(t, value))
+ 			default:
+ 				assert.JSONEq(t, `{"id":"77"}`, mustMarshalJSON(t, value))
+ 			}
+@@ -274,7 +274,7 @@ func runTypedPullRequestCases(t *testing.T, session *mcp.ClientSession, schemas
+ 
+ func TestTypedConsolidatedPullRequestOutputs(t *testing.T) {
+ 	const minimalPR = `{"number":1,"title":"Subject","body":"body","state":"open","draft":false,"merged":false,"mergeable_state":"clean","html_url":"https://github.com/owner/repo/pull/1","user":{"login":"octocat"},"head":{"ref":"feature","sha":"abc"},"base":{"ref":"main","sha":"def"},"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}`
+-	const prRef = `{"id":"0","url":"https://github.com/owner/repo/pull/1"}`
++	const prRef = `{"id":"0","url":"https://github.com/owner/repo/pull/1","number":1,"html_url":"https://github.com/owner/repo/pull/1"}`
+ 	cases := []typedPullRequestCase{
+ 		{"pull_request_read", map[string]any{"method": "get", "pullNumber": "1"}, minimalPR},
+ 		{"pull_request_read", map[string]any{"method": "get", "pullNumber": 3}, `null`},
+@@ -305,10 +305,10 @@ func TestTypedConsolidatedPullRequestOutputs(t *testing.T) {
+ 		{"pull_request_review_write", map[string]any{"method": "resolve_thread", "threadId": "T_1"}, "review thread resolved successfully"},
+ 		{"pull_request_review_write", map[string]any{"method": "unresolve_thread", "threadId": "T_1"}, "review thread unresolved successfully"},
+ 		{"add_comment_to_pending_review", map[string]any{"pullNumber": "1", "path": "file", "body": "nit", "subjectType": "LINE", "line": "3", "side": "RIGHT", "startLine": 2, "startSide": 7}, "pull request review comment successfully added to pending review"},
+-		{"add_reply_to_pull_request_comment", map[string]any{"pullNumber": "1", "commentId": "42", "body": "reply"}, `{"id":"43","url":"https://github.com/owner/repo/pull/1#discussion_r43"}`},
++		{"add_reply_to_pull_request_comment", map[string]any{"pullNumber": "1", "commentId": "42", "body": "reply"}, `{"id":"43","url":"https://github.com/owner/repo/pull/1#discussion_r43","number":1,"html_url":"https://github.com/owner/repo/pull/1#discussion_r43"}`},
+ 		{"add_reply_to_pull_request_comment", map[string]any{"commentId": 42, "pullNumber": "x", "reaction": "heart"}, `{"id":"77","url":"https://api.github.com/repos/owner/repo/pulls/comments/42/reactions/77"}`},
+ 		{"add_reply_to_pull_request_comment", map[string]any{"commentId": 42, "reaction": "heart"}, `{"id":"77","url":"https://api.github.com/repos/owner/repo/pulls/comments/42/reactions/77"}`},
+-		{"add_reply_to_pull_request_comment", map[string]any{"pullNumber": 1, "commentId": 42.0, "body": "reply", "reaction": "heart"}, `{"comment":{"id":"43","url":"https://github.com/owner/repo/pull/1#discussion_r43"},"reaction":{"id":"77","url":"https://api.github.com/repos/owner/repo/pulls/comments/42/reactions/77"}}`},
++		{"add_reply_to_pull_request_comment", map[string]any{"pullNumber": 1, "commentId": 42.0, "body": "reply", "reaction": "heart"}, `{"comment":{"id":"43","url":"https://github.com/owner/repo/pull/1#discussion_r43","number":1,"html_url":"https://github.com/owner/repo/pull/1#discussion_r43"},"reaction":{"id":"77","url":"https://api.github.com/repos/owner/repo/pulls/comments/42/reactions/77"}}`},
+ 	}
+ 	for _, protocol := range typedPullRequestProtocols {
+ 		t.Run("protocol="+protocol, func(t *testing.T) {
+@@ -393,7 +393,7 @@ func TestTypedPullRequestWriteAwaitingForm(t *testing.T) {
+ 					assert.Nil(t, result.StructuredContent)
+ 				}
+ 				args["_ui_submitted"] = true
+-				runTypedPullRequestCases(t, session, schemas, []typedPullRequestCase{{tool, args, `{"id":"0","url":"https://github.com/owner/repo/pull/1"}`}})
++				runTypedPullRequestCases(t, session, schemas, []typedPullRequestCase{{tool, args, `{"id":"0","url":"https://github.com/owner/repo/pull/1","number":1,"html_url":"https://github.com/owner/repo/pull/1"}`}})
+ 			}
+ 		})
+ 	}
+diff --git a/pkg/github/typed_granular_issue_outputs_test.go b/pkg/github/typed_granular_issue_outputs_test.go
+index d2b833d..19a3499 100644
+--- a/pkg/github/typed_granular_issue_outputs_test.go
++++ b/pkg/github/typed_granular_issue_outputs_test.go
+@@ -85,7 +85,7 @@ type granularIssueWireCase struct {
+ 	method     string
+ }
+ 
+-const granularMutationText = `{"id":"123","url":"https://github.com/owner/repo/issues/1"}`
++const granularMutationText = `{"id":"123","url":"https://github.com/owner/repo/issues/1","number":1,"html_url":"https://github.com/owner/repo/issues/1"}`
+ const granularSubIssueAPIResponse = `{"id":7,"number":7,"title":"Child\u202e","body":"body\u202e","url":"https://api.github.com/repos/owner/repo/issues/7","html_url":"https://github.com/owner/repo/issues/7","comments_url":"https://api.github.com/repos/owner/repo/issues/7/comments","node_id":"I_7","issue_field_values":[{"issue_field_id":11,"node_id":"IF_11","data_type":"number","value":0},{"issue_field_id":12,"node_id":"IF_12","data_type":"text","value":""},{"issue_field_id":13,"node_id":"IF_13","data_type":"text","value":false},{"issue_field_id":14,"node_id":"IF_14","data_type":"text","value":null}]}`
+ const granularSubIssueText = `{"id":7,"number":7,"title":"Child","body":"body","url":"https://api.github.com/repos/owner/repo/issues/7","html_url":"https://github.com/owner/repo/issues/7","comments_url":"https://api.github.com/repos/owner/repo/issues/7/comments","node_id":"I_7","issue_field_values":[{"issue_field_id":11,"node_id":"IF_11","data_type":"number","value":0},{"issue_field_id":12,"node_id":"IF_12","data_type":"text","value":""},{"issue_field_id":13,"node_id":"IF_13","data_type":"text","value":false},{"issue_field_id":14,"node_id":"IF_14","data_type":"text","value":null}]}`
+ 
+@@ -180,7 +180,7 @@ func granularWireDeps(t *testing.T, current **granularIssueWireCase, fail bool)
+ 		case strings.Contains(tc.name, "reaction"):
+ 			_, _ = w.Write([]byte(`{"id":9}`))
+ 		default:
+-			_, _ = w.Write([]byte(`{"id":123,"html_url":"https://github.com/owner/repo/issues/1"}`))
++			_, _ = w.Write([]byte(`{"id":123,"number":1,"html_url":"https://github.com/owner/repo/issues/1"}`))
+ 		}
+ 	})}}
+ 	gql := &http.Client{Transport: recorderTransport{handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+@@ -213,7 +213,7 @@ func granularWireDeps(t *testing.T, current **granularIssueWireCase, fail bool)
+ 			if tc.args["body"] != nil {
+ 				assert.Equal(t, tc.args["body"], input["body"])
+ 			}
+-			_, _ = w.Write([]byte(`{"data":{"createIssue":{"issue":{"fullDatabaseId":"123","url":"https://github.com/owner/repo/issues/1"}}}}`))
++			_, _ = w.Write([]byte(`{"data":{"createIssue":{"issue":{"fullDatabaseId":"123","number":1,"url":"https://github.com/owner/repo/issues/1"}}}}`))
+ 		case strings.Contains(request.Query, "setIssueFieldValue("):
+ 			assert.Contains(t, r.Header.Get(headers.GraphQLFeaturesHeader), "update_issue_suggestions")
+ 			assert.JSONEq(t, `{"issueId":"I_1","issueFields":[{"fieldId":"IF_text","textValue":"Value","rationale":"Signal","confidence":"HIGH","suggest":true},{"fieldId":"IF_number","numberValue":0},{"fieldId":"IF_date","dateValue":"2026-10-02"},{"fieldId":"IF_select","singleSelectOptionId":"OPT_1"},{"fieldId":"IF_delete","delete":true}]}`, string(request.Variables["input"]))
+diff --git a/pkg/github/typed_granular_pull_request_outputs_test.go b/pkg/github/typed_granular_pull_request_outputs_test.go
+index 9585e96..d674ed1 100644
+--- a/pkg/github/typed_granular_pull_request_outputs_test.go
++++ b/pkg/github/typed_granular_pull_request_outputs_test.go
+@@ -43,7 +43,7 @@ type granularPRCase struct {
+ 	payload string
+ }
+ 
+-const granularPRReference = `{"id":"123","url":"https://github.com/owner/repo/pull/1"}`
++const granularPRReference = `{"id":"123","url":"https://github.com/owner/repo/pull/1","number":1,"html_url":"https://github.com/owner/repo/pull/1"}`
+ 
+ func granularPRCases() []granularPRCase {
+ 	return []granularPRCase{
+@@ -128,7 +128,7 @@ func granularPRDeps(t *testing.T, current **granularPRCase, outcome string) Base
+ 		case strings.Contains(path, "/reactions"):
+ 			_, _ = w.Write([]byte(`{"id":77,"content":"heart"}`))
+ 		default:
+-			_, _ = w.Write([]byte(`{"id":123,"html_url":"https://github.com/owner/repo/pull/1"}`))
++			_, _ = w.Write([]byte(`{"id":123,"number":1,"html_url":"https://github.com/owner/repo/pull/1"}`))
+ 		}
+ 	})}}
+ 	gql := &http.Client{Transport: recorderTransport{handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+diff --git a/pkg/github/typed_issue_outputs_test.go b/pkg/github/typed_issue_outputs_test.go
+index 698abdf..df27a16 100644
+--- a/pkg/github/typed_issue_outputs_test.go
++++ b/pkg/github/typed_issue_outputs_test.go
+@@ -97,7 +97,7 @@ func TestTypedIssueOutputs(t *testing.T) {
+ 		WithFeatureChecker(func(context.Context, string) (bool, error) { return true, nil }).Build()
+ 	require.NoError(t, err)
+ 
+-	const commentText = `{"id":"42","url":"https://github.com/owner/repo/issues/123#issuecomment-42"}`
++	const commentText = `{"id":"42","url":"https://github.com/owner/repo/issues/123#issuecomment-42","number":123,"html_url":"https://github.com/owner/repo/issues/123#issuecomment-42"}`
+ 	const reactionText = `{"id":"9","url":"https://api.github.com/repos/owner/repo/issues/123/reactions/9"}`
+ 	const blockedText = `{"issues":[{"number":7,"title":"Blocker","state":"OPEN","url":"https://github.com/owner/repo/issues/7","repository":"owner/repo"}],"pageInfo":{"hasNextPage":false,"nextPage":0}}`
+ 	const dependencyRefs = `"blocked_issue":{"number":123,"title":"Subject","state":"OPEN","url":"https://github.com/owner/repo/issues/123","repository":"owner/repo"},"blocking_issue":{"number":7,"title":"Blocker","state":"OPEN","url":"https://github.com/owner/repo/issues/7","repository":"owner/repo"}`
+@@ -112,11 +112,11 @@ func TestTypedIssueOutputs(t *testing.T) {
+ 		{name: "list_issue_types", args: map[string]any{"owner": "owner", "repo": "repo"}, text: `[{"id":1,"name":"Bug","is_enabled":false}]`, structured: `[{"id":1,"name":"Bug","is_enabled":false}]`},
+ 		{name: "list_issue_fields", args: map[string]any{"owner": "owner"}, text: `[{"id":"IF_1","full_database_id":99,"name":"Priority","description":"Importance","data_type":"SINGLE_SELECT","visibility":"ALL","options":[{"id":"OPT_1","name":"High","color":"red","priority":0}]}]`, structured: `[{"id":"IF_1","full_database_id":99,"name":"Priority","description":"Importance","data_type":"SINGLE_SELECT","visibility":"ALL","options":[{"id":"OPT_1","name":"High","color":"red","priority":0}]}]`},
+ 		{name: "list_issue_fields", args: map[string]any{"owner": "owner", "repo": "repo"}, text: `[{"id":"IF_1","full_database_id":99,"name":"Priority","description":"Importance","data_type":"SINGLE_SELECT","visibility":"ALL","options":[{"id":"OPT_1","name":"High","color":"red","priority":0}]}]`, structured: `[{"id":"IF_1","full_database_id":99,"name":"Priority","description":"Importance","data_type":"SINGLE_SELECT","visibility":"ALL","options":[{"id":"OPT_1","name":"High","color":"red","priority":0}]}]`},
+-		{name: "add_issue_comment", args: map[string]any{"owner": "owner", "repo": "repo", "issue_number": "123.0", "body": "Hello"}, text: commentText, structured: `{"id":"42","html_url":"https://github.com/owner/repo/issues/123#issuecomment-42"}`},
++		{name: "add_issue_comment", args: map[string]any{"owner": "owner", "repo": "repo", "issue_number": "123.0", "body": "Hello"}, text: commentText, structured: `{"id":"42","number":123,"html_url":"https://github.com/owner/repo/issues/123#issuecomment-42"}`},
+ 		{name: "add_issue_comment", args: map[string]any{"owner": "owner", "repo": "repo", "issue_number": "123", "reaction": "heart"}, text: reactionText, structured: `{"id":"9"}`},
+-		{name: "add_issue_comment", args: map[string]any{"owner": "owner", "repo": "repo", "issue_number": "123", "body": "Hello", "reaction": "heart"}, text: `{"comment":` + commentText + `,"reaction":` + reactionText + `}`, structured: `{"comment":{"id":"42","html_url":"https://github.com/owner/repo/issues/123#issuecomment-42"},"reaction":{"id":"9"}}`},
++		{name: "add_issue_comment", args: map[string]any{"owner": "owner", "repo": "repo", "issue_number": "123", "body": "Hello", "reaction": "heart"}, text: `{"comment":` + commentText + `,"reaction":` + reactionText + `}`, structured: `{"comment":{"id":"42","number":123,"html_url":"https://github.com/owner/repo/issues/123#issuecomment-42"},"reaction":{"id":"9"}}`},
+ 		{name: "add_issue_comment", args: map[string]any{"owner": "owner", "repo": "repo", "issue_number": "123", "comment_id": "42.0", "reaction": "heart"}, text: `{"id":"9","url":"https://api.github.com/repos/owner/repo/issues/comments/42/reactions/9"}`, structured: `{"id":"9"}`},
+-		{name: "update_issue_comment", args: map[string]any{"owner": "owner", "repo": "repo", "comment_id": "42.0", "body": "Changed"}, text: commentText, structured: `{"id":"42","html_url":"https://github.com/owner/repo/issues/123#issuecomment-42"}`},
++		{name: "update_issue_comment", args: map[string]any{"owner": "owner", "repo": "repo", "comment_id": "42.0", "body": "Changed"}, text: commentText, structured: `{"id":"42","number":123,"html_url":"https://github.com/owner/repo/issues/123#issuecomment-42"}`},
+ 		{name: "issue_dependency_read", args: map[string]any{"method": "get_blocked_by", "owner": "owner", "repo": "repo", "issue_number": "123", "page": "0", "perPage": "0"}, text: blockedText, structured: `{"issues":[{"number":7,"title":"Blocker","state":"OPEN","html_url":"https://github.com/owner/repo/issues/7","repository":"owner/repo"}],"pageInfo":{"hasNextPage":false,"nextPage":0}}`},
+ 		{name: "issue_dependency_read", args: map[string]any{"method": "get_blocking", "owner": "owner", "repo": "repo", "issue_number": "123"}, text: `{"issues":[],"pageInfo":{"hasNextPage":false,"nextPage":0}}`, structured: `{"issues":[],"pageInfo":{"hasNextPage":false,"nextPage":0}}`},
+ 		{name: "issue_dependency_write", args: map[string]any{"method": "ADD", "type": "BLOCKED_BY", "owner": "owner", "repo": "repo", "issue_number": "123", "related_issue_number": "7"}, text: `{` + dependencyRefs + `,"message":"dependency added"}`, structured: `{"blocked_issue":{"number":123,"title":"Subject","state":"OPEN","html_url":"https://github.com/owner/repo/issues/123","repository":"owner/repo"},"blocking_issue":{"number":7,"title":"Blocker","state":"OPEN","html_url":"https://github.com/owner/repo/issues/7","repository":"owner/repo"},"message":"dependency added"}`},
+-- 
+2.50.1 (Apple Git-155)
+

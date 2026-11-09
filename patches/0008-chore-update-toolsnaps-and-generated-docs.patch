@@ -1,0 +1,1210 @@
+From 1bd9ed205cd02cc79b81767a731937ed2e21f594 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 9 Nov 2026 12:50:51 -0700
+Subject: [PATCH 8/8] chore: update toolsnaps and generated docs
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QV62ZkZa646Swi2zdbdnXN
+---
+ README.md                                     | 36 ++++++-
+ docs/feature-flags.md                         |  1 +
+ .../__toolsnaps__/add_issue_comment.snap      |  8 ++
+ .../add_issue_comment_reaction.snap           |  6 ++
+ .../__toolsnaps__/add_issue_labels.snap       | 74 ++++++++++++++
+ .../__toolsnaps__/add_issue_reaction.snap     |  6 ++
+ ..._pull_request_review_comment_reaction.snap |  6 ++
+ .../add_reply_to_pull_request_comment.snap    | 11 ++-
+ pkg/github/__toolsnaps__/create_gist.snap     |  6 ++
+ pkg/github/__toolsnaps__/create_issue.snap    |  6 ++
+ .../__toolsnaps__/create_pull_request.snap    |  3 +
+ .../__toolsnaps__/create_repository.snap      |  6 ++
+ pkg/github/__toolsnaps__/fork_repository.snap |  6 ++
+ pkg/github/__toolsnaps__/get_files.snap       | 96 +++++++++++++++++++
+ pkg/github/__toolsnaps__/issue_write.snap     |  6 ++
+ .../__toolsnaps__/list_repository_files.snap  | 86 +++++++++++++++++
+ .../__toolsnaps__/pull_request_read.snap      |  3 +
+ .../pull_request_review_write.snap            | 52 +++++++++-
+ ...equest_review_write_resolution_reason.snap | 52 +++++++++-
+ .../__toolsnaps__/remove_issue_labels.snap    | 74 ++++++++++++++
+ .../request_pull_request_reviewers.snap       |  6 ++
+ .../__toolsnaps__/set_issue_fields.snap       |  6 ++
+ pkg/github/__toolsnaps__/update_gist.snap     |  6 ++
+ .../__toolsnaps__/update_issue_assignees.snap |  6 ++
+ .../__toolsnaps__/update_issue_body.snap      |  6 ++
+ .../__toolsnaps__/update_issue_comment.snap   |  4 +
+ .../__toolsnaps__/update_issue_labels.snap    |  6 ++
+ .../__toolsnaps__/update_issue_milestone.snap |  6 ++
+ .../__toolsnaps__/update_issue_state.snap     |  6 ++
+ .../__toolsnaps__/update_issue_title.snap     |  6 ++
+ .../__toolsnaps__/update_issue_type.snap      |  6 ++
+ .../__toolsnaps__/update_pull_request.snap    |  3 +
+ .../update_pull_request_body.snap             |  6 ++
+ .../update_pull_request_state.snap            |  6 ++
+ .../update_pull_request_title.snap            |  6 ++
+ 35 files changed, 625 insertions(+), 4 deletions(-)
+ create mode 100644 pkg/github/__toolsnaps__/add_issue_labels.snap
+ create mode 100644 pkg/github/__toolsnaps__/get_files.snap
+ create mode 100644 pkg/github/__toolsnaps__/list_repository_files.snap
+ create mode 100644 pkg/github/__toolsnaps__/remove_issue_labels.snap
+
+diff --git a/README.md b/README.md
+index 432541f..203dfd8 100644
+--- a/README.md
++++ b/README.md
+@@ -996,6 +996,13 @@ For negotiated supported protocol versions `2026-07-28` or newer, the consolidat
+   - `reaction`: Emoji reaction to add. Required unless body is provided. (string, optional)
+   - `repo`: Repository name (string, required)
+ 
++- **add_issue_labels** - Add labels to issue or pull request
++  - **OAuth Challenge Scopes**: `repo`
++  - `issue_number`: Issue or pull request number (number, required)
++  - `labels`: Label names to add (string[], required)
++  - `owner`: Repository owner (string, required)
++  - `repo`: Repository name (string, required)
++
+ - **get_label** - Get a specific label from a repository
+   - **OAuth Challenge Scopes**: `repo`
+   - `name`: Label name. (string, required)
+@@ -1067,6 +1074,13 @@ For negotiated supported protocol versions `2026-07-28` or newer, the consolidat
+   - `since`: Filter by date (ISO 8601 timestamp) (string, optional)
+   - `state`: Filter by state, by default both open and closed issues are returned when not provided (string, optional)
+ 
++- **remove_issue_labels** - Remove labels from issue or pull request
++  - **OAuth Challenge Scopes**: `repo`
++  - `issue_number`: Issue or pull request number (number, required)
++  - `labels`: Label names to remove (string[], required)
++  - `owner`: Repository owner (string, required)
++  - `repo`: Repository name (string, required)
++
+ - **search_issues** - Search issues
+   - **OAuth Challenge Scopes**: `repo`
+   - `fields`: Subset of fields to return for each issue result. If omitted, all fields are returned. Use this to reduce response size when you only need specific fields; omitting 'body', 'reactions', and 'labels' in particular drops the largest per-result data. (string[], optional)
+@@ -1270,7 +1284,7 @@ For negotiated supported protocol versions `2026-07-28` or newer, the consolidat
+ - **add_reply_to_pull_request_comment** - Add reply to pull request comment
+   - **OAuth Challenge Scopes**: `repo`
+   - `body`: The text of the reply. Required unless reaction is provided. (string, optional)
+-  - `commentId`: The numeric ID of the pull request review comment to reply or react to. Use the number from a #discussion_r... anchor, not the GraphQL thread node ID (PRRT_...). (number, required)
++  - `commentId`: The numeric ID of the pull request review comment to reply or react to: the comment's id from pull_request_read get_review_comments, or the number from a #discussion_r... anchor. Not the GraphQL thread node ID (PRRT_...). (number, required)
+   - `owner`: Repository owner (string, required)
+   - `pullNumber`: Pull request number. Required when body is provided. (number, optional)
+   - `reaction`: Emoji reaction to add. Required unless body is provided. (string, optional)
+@@ -1336,6 +1350,7 @@ For negotiated supported protocol versions `2026-07-28` or newer, the consolidat
+ - **pull_request_review_write** - Write operations (create, submit, delete) on pull request reviews
+   - **OAuth Challenge Scopes**: `repo`
+   - `body`: Review comment text (string, optional)
++  - `comments`: Inline comments to add with the review. Only used by the create method. (object[], optional)
+   - `commitID`: SHA of commit to review (string, optional)
+   - `event`: Review action to perform. (string, optional)
+   - `method`: The write operation to perform on pull request review. (string, required)
+@@ -1386,6 +1401,7 @@ For negotiated supported protocol versions `2026-07-28` or newer, the consolidat
+   - **OAuth Challenge Scopes**: `repo`
+   - `branch`: Name for new branch (string, required)
+   - `from_branch`: Source branch (defaults to repo default) (string, optional)
++  - `from_sha`: Full 40-character commit SHA to start the branch from. Cannot be combined with from_branch (string, optional)
+   - `owner`: Repository owner (string, required)
+   - `repo`: Repository name (string, required)
+ 
+@@ -1415,6 +1431,7 @@ For negotiated supported protocol versions `2026-07-28` or newer, the consolidat
+   - `owner`: Repository owner (username or organization) (string, required)
+   - `path`: Path to the file to delete (string, required)
+   - `repo`: Repository name (string, required)
++  - `sha`: Blob SHA of the file as last read. If provided, the delete fails when the file on the branch has a different SHA (string, optional)
+ 
+ - **delete_repository** - Delete repository
+   - **OAuth Challenge Scopes**: `delete_repo`, `repo`
+@@ -1445,6 +1462,14 @@ For negotiated supported protocol versions `2026-07-28` or newer, the consolidat
+   - `repo`: Repository name (string, required)
+   - `sha`: Accepts optional commit SHA. If specified, it will be used instead of ref (string, optional)
+ 
++- **get_files** - Get several files
++  - **OAuth Challenge Scopes**: `repo`
++  - `max_bytes`: Maximum total bytes of content to return (default 200000, at most 1000000) (integer, optional)
++  - `owner`: Repository owner (string, required)
++  - `paths`: File paths relative to the repository root (string[], required)
++  - `ref`: Branch, tag or commit SHA (defaults to the default branch) (string, optional)
++  - `repo`: Repository name (string, required)
++
+ - **get_latest_release** - Get latest release
+   - **OAuth Challenge Scopes**: `repo`
+   - `owner`: Repository owner (string, required)
+@@ -1498,6 +1523,14 @@ For negotiated supported protocol versions `2026-07-28` or newer, the consolidat
+   - `perPage`: Results per page for pagination (default 30, min 1, max 100) (number, optional)
+   - `repo`: Repository name (string, required)
+ 
++- **list_repository_files** - List repository files
++  - **OAuth Challenge Scopes**: `repo`
++  - `max_entries`: Maximum number of files to return (default 1000, at most 5000) (integer, optional)
++  - `owner`: Repository owner (string, required)
++  - `path`: Only list files under this directory (string, optional)
++  - `ref`: Branch, tag or commit SHA (defaults to the default branch) (string, optional)
++  - `repo`: Repository name (string, required)
++
+ - **list_tags** - List tags
+   - **OAuth Challenge Scopes**: `repo`
+   - `owner`: Repository owner (string, required)
+@@ -1508,6 +1541,7 @@ For negotiated supported protocol versions `2026-07-28` or newer, the consolidat
+ - **push_files** - Push files to repository
+   - **OAuth Challenge Scopes**: `repo`, `workflow`
+   - `branch`: Branch to push to (string, required)
++  - `create_branch`: Create the branch from the default branch if it does not exist. When false (the default), pushing to a missing branch fails (boolean, optional)
+   - `files`: Array of file objects to push, each object with path (string) and content (string) (object[], required)
+   - `message`: Commit message (string, required)
+   - `owner`: Repository owner (string, required)
+diff --git a/docs/feature-flags.md b/docs/feature-flags.md
+index f3380ae..d8b12da 100644
+--- a/docs/feature-flags.md
++++ b/docs/feature-flags.md
+@@ -472,6 +472,7 @@ as output formatting) won't appear here.
+ - **pull_request_review_write** - Write operations (create, submit, delete) on pull request reviews
+   - **OAuth Challenge Scopes**: `repo`
+   - `body`: Review comment text (string, optional)
++  - `comments`: Inline comments to add with the review. Only used by the create method. (object[], optional)
+   - `commitID`: SHA of commit to review (string, optional)
+   - `event`: Review action to perform. (string, optional)
+   - `method`: The write operation to perform on pull request review. (string, required)
+diff --git a/pkg/github/__toolsnaps__/add_issue_comment.snap b/pkg/github/__toolsnaps__/add_issue_comment.snap
+index 58102f7..6e784b7 100644
+--- a/pkg/github/__toolsnaps__/add_issue_comment.snap
++++ b/pkg/github/__toolsnaps__/add_issue_comment.snap
+@@ -67,6 +67,10 @@
+           "id": {
+             "description": "The ID of the created comment or reaction.",
+             "type": "string"
++          },
++          "number": {
++            "description": "The number of the issue or pull request the comment is on.",
++            "type": "integer"
+           }
+         },
+         "required": [
+@@ -101,6 +105,10 @@
+               "id": {
+                 "description": "The ID of the created comment or reaction.",
+                 "type": "string"
++              },
++              "number": {
++                "description": "The number of the issue or pull request the comment is on.",
++                "type": "integer"
+               }
+             },
+             "required": [
+diff --git a/pkg/github/__toolsnaps__/add_issue_comment_reaction.snap b/pkg/github/__toolsnaps__/add_issue_comment_reaction.snap
+index 8cad3f2..8bc50e3 100644
+--- a/pkg/github/__toolsnaps__/add_issue_comment_reaction.snap
++++ b/pkg/github/__toolsnaps__/add_issue_comment_reaction.snap
+@@ -63,9 +63,15 @@
+   "outputSchema": {
+     "additionalProperties": false,
+     "properties": {
++      "html_url": {
++        "type": "string"
++      },
+       "id": {
+         "type": "string"
+       },
++      "number": {
++        "type": "integer"
++      },
+       "url": {
+         "type": "string"
+       }
+diff --git a/pkg/github/__toolsnaps__/add_issue_labels.snap b/pkg/github/__toolsnaps__/add_issue_labels.snap
+new file mode 100644
+index 0000000..dc140ad
+--- /dev/null
++++ b/pkg/github/__toolsnaps__/add_issue_labels.snap
+@@ -0,0 +1,74 @@
++{
++  "annotations": {
++    "destructiveHint": false,
++    "idempotentHint": true,
++    "readOnlyHint": false,
++    "title": "Add labels to issue or pull request"
++  },
++  "description": "Add labels to an issue or pull request. Labels already on it are kept, so there is no need to read them first. Returns the labels after the change.",
++  "inputSchema": {
++    "properties": {
++      "issue_number": {
++        "description": "Issue or pull request number",
++        "minimum": 1,
++        "type": "number"
++      },
++      "labels": {
++        "description": "Label names to add",
++        "items": {
++          "minLength": 1,
++          "type": "string"
++        },
++        "minItems": 1,
++        "type": "array"
++      },
++      "owner": {
++        "description": "Repository owner",
++        "type": "string"
++      },
++      "repo": {
++        "description": "Repository name",
++        "type": "string"
++      }
++    },
++    "required": [
++      "owner",
++      "repo",
++      "issue_number",
++      "labels"
++    ],
++    "type": "object"
++  },
++  "name": "add_issue_labels",
++  "outputSchema": {
++    "additionalProperties": false,
++    "properties": {
++      "labels": {
++        "items": {
++          "type": "string"
++        },
++        "type": [
++          "null",
++          "array"
++        ]
++      },
++      "not_present": {
++        "items": {
++          "type": "string"
++        },
++        "type": [
++          "null",
++          "array"
++        ]
++      },
++      "number": {
++        "type": "integer"
++      }
++    },
++    "required": [
++      "number",
++      "labels"
++    ],
++    "type": "object"
++  }
++}
+\ No newline at end of file
+diff --git a/pkg/github/__toolsnaps__/add_issue_reaction.snap b/pkg/github/__toolsnaps__/add_issue_reaction.snap
+index de42bb0..23496be 100644
+--- a/pkg/github/__toolsnaps__/add_issue_reaction.snap
++++ b/pkg/github/__toolsnaps__/add_issue_reaction.snap
+@@ -63,9 +63,15 @@
+   "outputSchema": {
+     "additionalProperties": false,
+     "properties": {
++      "html_url": {
++        "type": "string"
++      },
+       "id": {
+         "type": "string"
+       },
++      "number": {
++        "type": "integer"
++      },
+       "url": {
+         "type": "string"
+       }
+diff --git a/pkg/github/__toolsnaps__/add_pull_request_review_comment_reaction.snap b/pkg/github/__toolsnaps__/add_pull_request_review_comment_reaction.snap
+index 73ea0f8..c2fe9e6 100644
+--- a/pkg/github/__toolsnaps__/add_pull_request_review_comment_reaction.snap
++++ b/pkg/github/__toolsnaps__/add_pull_request_review_comment_reaction.snap
+@@ -63,10 +63,16 @@
+   "outputSchema": {
+     "additionalProperties": false,
+     "properties": {
++      "html_url": {
++        "type": "string"
++      },
+       "id": {
+         "description": "Reaction ID",
+         "type": "string"
+       },
++      "number": {
++        "type": "integer"
++      },
+       "url": {
+         "description": "Reaction URL",
+         "type": "string"
+diff --git a/pkg/github/__toolsnaps__/add_reply_to_pull_request_comment.snap b/pkg/github/__toolsnaps__/add_reply_to_pull_request_comment.snap
+index 8640ba2..b5c5a12 100644
+--- a/pkg/github/__toolsnaps__/add_reply_to_pull_request_comment.snap
++++ b/pkg/github/__toolsnaps__/add_reply_to_pull_request_comment.snap
+@@ -12,7 +12,7 @@
+         "type": "string"
+       },
+       "commentId": {
+-        "description": "The numeric ID of the pull request review comment to reply or react to. Use the number from a #discussion_r... anchor, not the GraphQL thread node ID (PRRT_...).",
++        "description": "The numeric ID of the pull request review comment to reply or react to: the comment's id from pull_request_read get_review_comments, or the number from a #discussion_r... anchor. Not the GraphQL thread node ID (PRRT_...).",
+         "minimum": 1,
+         "type": "number"
+       },
+@@ -62,6 +62,9 @@
+           },
+           "id": {
+             "type": "string"
++          },
++          "number": {
++            "type": "integer"
+           }
+         },
+         "required": [
+@@ -81,6 +84,9 @@
+               },
+               "id": {
+                 "type": "string"
++              },
++              "number": {
++                "type": "integer"
+               }
+             },
+             "required": [
+@@ -97,6 +103,9 @@
+               },
+               "id": {
+                 "type": "string"
++              },
++              "number": {
++                "type": "integer"
+               }
+             },
+             "required": [
+diff --git a/pkg/github/__toolsnaps__/create_gist.snap b/pkg/github/__toolsnaps__/create_gist.snap
+index ab94493..4289ed4 100644
+--- a/pkg/github/__toolsnaps__/create_gist.snap
++++ b/pkg/github/__toolsnaps__/create_gist.snap
+@@ -35,9 +35,15 @@
+   "outputSchema": {
+     "additionalProperties": false,
+     "properties": {
++      "html_url": {
++        "type": "string"
++      },
+       "id": {
+         "type": "string"
+       },
++      "number": {
++        "type": "integer"
++      },
+       "url": {
+         "type": "string"
+       }
+diff --git a/pkg/github/__toolsnaps__/create_issue.snap b/pkg/github/__toolsnaps__/create_issue.snap
+index b616605..5271a30 100644
+--- a/pkg/github/__toolsnaps__/create_issue.snap
++++ b/pkg/github/__toolsnaps__/create_issue.snap
+@@ -64,9 +64,15 @@
+   "outputSchema": {
+     "additionalProperties": false,
+     "properties": {
++      "html_url": {
++        "type": "string"
++      },
+       "id": {
+         "type": "string"
+       },
++      "number": {
++        "type": "integer"
++      },
+       "url": {
+         "type": "string"
+       }
+diff --git a/pkg/github/__toolsnaps__/create_pull_request.snap b/pkg/github/__toolsnaps__/create_pull_request.snap
+index 749065d..b9170b3 100644
+--- a/pkg/github/__toolsnaps__/create_pull_request.snap
++++ b/pkg/github/__toolsnaps__/create_pull_request.snap
+@@ -77,6 +77,9 @@
+           },
+           "id": {
+             "type": "string"
++          },
++          "number": {
++            "type": "integer"
+           }
+         },
+         "required": [
+diff --git a/pkg/github/__toolsnaps__/create_repository.snap b/pkg/github/__toolsnaps__/create_repository.snap
+index ca35ee4..e4fcf9b 100644
+--- a/pkg/github/__toolsnaps__/create_repository.snap
++++ b/pkg/github/__toolsnaps__/create_repository.snap
+@@ -50,9 +50,15 @@
+   "outputSchema": {
+     "additionalProperties": false,
+     "properties": {
++      "html_url": {
++        "type": "string"
++      },
+       "id": {
+         "type": "string"
+       },
++      "number": {
++        "type": "integer"
++      },
+       "url": {
+         "type": "string"
+       }
+diff --git a/pkg/github/__toolsnaps__/fork_repository.snap b/pkg/github/__toolsnaps__/fork_repository.snap
+index e65da43..fe17bc8 100644
+--- a/pkg/github/__toolsnaps__/fork_repository.snap
++++ b/pkg/github/__toolsnaps__/fork_repository.snap
+@@ -49,9 +49,15 @@
+       {
+         "additionalProperties": false,
+         "properties": {
++          "html_url": {
++            "type": "string"
++          },
+           "id": {
+             "type": "string"
+           },
++          "number": {
++            "type": "integer"
++          },
+           "url": {
+             "type": "string"
+           }
+diff --git a/pkg/github/__toolsnaps__/get_files.snap b/pkg/github/__toolsnaps__/get_files.snap
+new file mode 100644
+index 0000000..4ff7ae1
+--- /dev/null
++++ b/pkg/github/__toolsnaps__/get_files.snap
+@@ -0,0 +1,96 @@
++{
++  "annotations": {
++    "idempotentHint": false,
++    "readOnlyHint": true,
++    "title": "Get several files"
++  },
++  "description": "Read up to 25 text files from a repository in one call. Files come back in the order requested; a file that cannot be read gets an error instead of content, and content stops once max_bytes have been returned in total.",
++  "inputSchema": {
++    "properties": {
++      "max_bytes": {
++        "description": "Maximum total bytes of content to return (default 200000, at most 1000000)",
++        "maximum": 1000000,
++        "minimum": 1,
++        "type": "integer"
++      },
++      "owner": {
++        "description": "Repository owner",
++        "type": "string"
++      },
++      "paths": {
++        "description": "File paths relative to the repository root",
++        "items": {
++          "type": "string"
++        },
++        "maxItems": 25,
++        "minItems": 1,
++        "type": "array"
++      },
++      "ref": {
++        "description": "Branch, tag or commit SHA (defaults to the default branch)",
++        "type": "string"
++      },
++      "repo": {
++        "description": "Repository name",
++        "type": "string"
++      }
++    },
++    "required": [
++      "owner",
++      "repo",
++      "paths"
++    ],
++    "type": "object"
++  },
++  "name": "get_files",
++  "outputSchema": {
++    "additionalProperties": false,
++    "properties": {
++      "bytes": {
++        "type": "integer"
++      },
++      "files": {
++        "items": {
++          "additionalProperties": false,
++          "properties": {
++            "content": {
++              "type": "string"
++            },
++            "error": {
++              "type": "string"
++            },
++            "path": {
++              "type": "string"
++            },
++            "sha": {
++              "type": "string"
++            },
++            "size": {
++              "type": "integer"
++            },
++            "truncated": {
++              "type": "boolean"
++            }
++          },
++          "required": [
++            "path"
++          ],
++          "type": "object"
++        },
++        "type": [
++          "null",
++          "array"
++        ]
++      },
++      "truncated": {
++        "type": "boolean"
++      }
++    },
++    "required": [
++      "files",
++      "bytes",
++      "truncated"
++    ],
++    "type": "object"
++  }
++}
+\ No newline at end of file
+diff --git a/pkg/github/__toolsnaps__/issue_write.snap b/pkg/github/__toolsnaps__/issue_write.snap
+index dde7365..f4824bb 100644
+--- a/pkg/github/__toolsnaps__/issue_write.snap
++++ b/pkg/github/__toolsnaps__/issue_write.snap
+@@ -194,9 +194,15 @@
+       "issue": {
+         "additionalProperties": false,
+         "properties": {
++          "html_url": {
++            "type": "string"
++          },
+           "id": {
+             "type": "string"
+           },
++          "number": {
++            "type": "integer"
++          },
+           "url": {
+             "type": "string"
+           }
+diff --git a/pkg/github/__toolsnaps__/list_repository_files.snap b/pkg/github/__toolsnaps__/list_repository_files.snap
+new file mode 100644
+index 0000000..7f95f08
+--- /dev/null
++++ b/pkg/github/__toolsnaps__/list_repository_files.snap
+@@ -0,0 +1,86 @@
++{
++  "annotations": {
++    "idempotentHint": false,
++    "readOnlyHint": true,
++    "title": "List repository files"
++  },
++  "description": "List all files in a repository, including subdirectories, with their sizes in bytes. Use it instead of listing directories one by one. Narrow large repositories with path.",
++  "inputSchema": {
++    "properties": {
++      "max_entries": {
++        "description": "Maximum number of files to return (default 1000, at most 5000)",
++        "maximum": 5000,
++        "minimum": 1,
++        "type": "integer"
++      },
++      "owner": {
++        "description": "Repository owner",
++        "type": "string"
++      },
++      "path": {
++        "description": "Only list files under this directory",
++        "type": "string"
++      },
++      "ref": {
++        "description": "Branch, tag or commit SHA (defaults to the default branch)",
++        "type": "string"
++      },
++      "repo": {
++        "description": "Repository name",
++        "type": "string"
++      }
++    },
++    "required": [
++      "owner",
++      "repo"
++    ],
++    "type": "object"
++  },
++  "name": "list_repository_files",
++  "outputSchema": {
++    "additionalProperties": false,
++    "properties": {
++      "files": {
++        "items": {
++          "additionalProperties": false,
++          "properties": {
++            "path": {
++              "type": "string"
++            },
++            "size": {
++              "type": "integer"
++            }
++          },
++          "required": [
++            "path",
++            "size"
++          ],
++          "type": "object"
++        },
++        "type": [
++          "null",
++          "array"
++        ]
++      },
++      "path": {
++        "type": "string"
++      },
++      "ref": {
++        "type": "string"
++      },
++      "total": {
++        "type": "integer"
++      },
++      "truncated": {
++        "type": "boolean"
++      }
++    },
++    "required": [
++      "ref",
++      "total",
++      "truncated",
++      "files"
++    ],
++    "type": "object"
++  }
++}
+\ No newline at end of file
+diff --git a/pkg/github/__toolsnaps__/pull_request_read.snap b/pkg/github/__toolsnaps__/pull_request_read.snap
+index c99d427..be25009 100644
+--- a/pkg/github/__toolsnaps__/pull_request_read.snap
++++ b/pkg/github/__toolsnaps__/pull_request_read.snap
+@@ -481,6 +481,9 @@
+                         "description": "Browser URL.",
+                         "type": "string"
+                       },
++                      "id": {
++                        "type": "integer"
++                      },
+                       "line": {
+                         "description": "One-based diff line number.",
+                         "type": [
+diff --git a/pkg/github/__toolsnaps__/pull_request_review_write.snap b/pkg/github/__toolsnaps__/pull_request_review_write.snap
+index 70cf647..1cc730b 100644
+--- a/pkg/github/__toolsnaps__/pull_request_review_write.snap
++++ b/pkg/github/__toolsnaps__/pull_request_review_write.snap
+@@ -4,13 +4,63 @@
+     "readOnlyHint": false,
+     "title": "Write operations (create, submit, delete) on pull request reviews"
+   },
+-  "description": "Create and/or submit, delete review of a pull request.\n\nAvailable methods:\n- create: Create a new review of a pull request. If \"event\" parameter is provided, the review is submitted. If \"event\" is omitted, a pending review is created.\n- submit_pending: Submit an existing pending review of a pull request. This requires that a pending review exists for the current user on the specified pull request. The \"body\" and \"event\" parameters are used when submitting the review.\n- delete_pending: Delete an existing pending review of a pull request. This requires that a pending review exists for the current user on the specified pull request.\n- resolve_thread: Resolve a review thread. Requires only \"threadId\" parameter with the thread's node ID (e.g., PRRT_kwDOxxx). The owner, repo, and pullNumber parameters are not used for this method. Resolving an already-resolved thread is a no-op.\n- unresolve_thread: Unresolve a previously resolved review thread. Requires only \"threadId\" parameter. The owner, repo, and pullNumber parameters are not used for this method. Unresolving an already-unresolved thread is a no-op.\n",
++  "description": "Create and/or submit, delete review of a pull request.\n\nAvailable methods:\n- create: Create a new review of a pull request. If \"event\" parameter is provided, the review is submitted. If \"event\" is omitted, a pending review is created. Inline comments passed in \"comments\" are added to the review, so body, event and comments take a single call.\n- submit_pending: Submit an existing pending review of a pull request. This requires that a pending review exists for the current user on the specified pull request. The \"body\" and \"event\" parameters are used when submitting the review.\n- delete_pending: Delete an existing pending review of a pull request. This requires that a pending review exists for the current user on the specified pull request.\n- resolve_thread: Resolve a review thread. Requires only \"threadId\" parameter with the thread's node ID (e.g., PRRT_kwDOxxx). The owner, repo, and pullNumber parameters are not used for this method. Resolving an already-resolved thread is a no-op.\n- unresolve_thread: Unresolve a previously resolved review thread. Requires only \"threadId\" parameter. The owner, repo, and pullNumber parameters are not used for this method. Unresolving an already-unresolved thread is a no-op.\n",
+   "inputSchema": {
+     "properties": {
+       "body": {
+         "description": "Review comment text",
+         "type": "string"
+       },
++      "comments": {
++        "description": "Inline comments to add with the review. Only used by the create method.",
++        "items": {
++          "additionalProperties": false,
++          "properties": {
++            "body": {
++              "description": "Comment text",
++              "minLength": 1,
++              "type": "string"
++            },
++            "line": {
++              "description": "Line number in the file to comment on; the last line for a multi-line comment",
++              "minimum": 1,
++              "type": "integer"
++            },
++            "path": {
++              "description": "File path relative to the repository root",
++              "type": "string"
++            },
++            "side": {
++              "description": "Diff side of the line: RIGHT (the new version, default) or LEFT (the old version)",
++              "enum": [
++                "LEFT",
++                "RIGHT"
++              ],
++              "type": "string"
++            },
++            "start_line": {
++              "description": "First line of a multi-line comment",
++              "minimum": 1,
++              "type": "integer"
++            },
++            "start_side": {
++              "description": "Diff side of start_line (defaults to side)",
++              "enum": [
++                "LEFT",
++                "RIGHT"
++              ],
++              "type": "string"
++            }
++          },
++          "required": [
++            "path",
++            "line",
++            "body"
++          ],
++          "type": "object"
++        },
++        "type": "array"
++      },
+       "commitID": {
+         "description": "SHA of commit to review",
+         "type": "string"
+diff --git a/pkg/github/__toolsnaps__/pull_request_review_write_resolution_reason.snap b/pkg/github/__toolsnaps__/pull_request_review_write_resolution_reason.snap
+index 45e19ca..42605cc 100644
+--- a/pkg/github/__toolsnaps__/pull_request_review_write_resolution_reason.snap
++++ b/pkg/github/__toolsnaps__/pull_request_review_write_resolution_reason.snap
+@@ -4,13 +4,63 @@
+     "readOnlyHint": false,
+     "title": "Write operations (create, submit, delete) on pull request reviews"
+   },
+-  "description": "Create and/or submit, delete review of a pull request.\n\nAvailable methods:\n- create: Create a new review of a pull request. If \"event\" parameter is provided, the review is submitted. If \"event\" is omitted, a pending review is created.\n- submit_pending: Submit an existing pending review of a pull request. This requires that a pending review exists for the current user on the specified pull request. The \"body\" and \"event\" parameters are used when submitting the review.\n- delete_pending: Delete an existing pending review of a pull request. This requires that a pending review exists for the current user on the specified pull request.\n- resolve_thread: Resolve a review thread. Requires only \"threadId\" parameter with the thread's node ID (e.g., PRRT_kwDOxxx). The owner, repo, and pullNumber parameters are not used for this method. Resolving an already-resolved thread is a no-op.\n- unresolve_thread: Unresolve a previously resolved review thread. Requires only \"threadId\" parameter. The owner, repo, and pullNumber parameters are not used for this method. Unresolving an already-unresolved thread is a no-op.\n",
++  "description": "Create and/or submit, delete review of a pull request.\n\nAvailable methods:\n- create: Create a new review of a pull request. If \"event\" parameter is provided, the review is submitted. If \"event\" is omitted, a pending review is created. Inline comments passed in \"comments\" are added to the review, so body, event and comments take a single call.\n- submit_pending: Submit an existing pending review of a pull request. This requires that a pending review exists for the current user on the specified pull request. The \"body\" and \"event\" parameters are used when submitting the review.\n- delete_pending: Delete an existing pending review of a pull request. This requires that a pending review exists for the current user on the specified pull request.\n- resolve_thread: Resolve a review thread. Requires only \"threadId\" parameter with the thread's node ID (e.g., PRRT_kwDOxxx). The owner, repo, and pullNumber parameters are not used for this method. Resolving an already-resolved thread is a no-op.\n- unresolve_thread: Unresolve a previously resolved review thread. Requires only \"threadId\" parameter. The owner, repo, and pullNumber parameters are not used for this method. Unresolving an already-unresolved thread is a no-op.\n",
+   "inputSchema": {
+     "properties": {
+       "body": {
+         "description": "Review comment text",
+         "type": "string"
+       },
++      "comments": {
++        "description": "Inline comments to add with the review. Only used by the create method.",
++        "items": {
++          "additionalProperties": false,
++          "properties": {
++            "body": {
++              "description": "Comment text",
++              "minLength": 1,
++              "type": "string"
++            },
++            "line": {
++              "description": "Line number in the file to comment on; the last line for a multi-line comment",
++              "minimum": 1,
++              "type": "integer"
++            },
++            "path": {
++              "description": "File path relative to the repository root",
++              "type": "string"
++            },
++            "side": {
++              "description": "Diff side of the line: RIGHT (the new version, default) or LEFT (the old version)",
++              "enum": [
++                "LEFT",
++                "RIGHT"
++              ],
++              "type": "string"
++            },
++            "start_line": {
++              "description": "First line of a multi-line comment",
++              "minimum": 1,
++              "type": "integer"
++            },
++            "start_side": {
++              "description": "Diff side of start_line (defaults to side)",
++              "enum": [
++                "LEFT",
++                "RIGHT"
++              ],
++              "type": "string"
++            }
++          },
++          "required": [
++            "path",
++            "line",
++            "body"
++          ],
++          "type": "object"
++        },
++        "type": "array"
++      },
+       "commitID": {
+         "description": "SHA of commit to review",
+         "type": "string"
+diff --git a/pkg/github/__toolsnaps__/remove_issue_labels.snap b/pkg/github/__toolsnaps__/remove_issue_labels.snap
+new file mode 100644
+index 0000000..6498423
+--- /dev/null
++++ b/pkg/github/__toolsnaps__/remove_issue_labels.snap
+@@ -0,0 +1,74 @@
++{
++  "annotations": {
++    "destructiveHint": true,
++    "idempotentHint": true,
++    "readOnlyHint": false,
++    "title": "Remove labels from issue or pull request"
++  },
++  "description": "Remove labels from an issue or pull request. Its other labels are kept. Returns the labels after the change; requested labels that were not on it are listed in not_present.",
++  "inputSchema": {
++    "properties": {
++      "issue_number": {
++        "description": "Issue or pull request number",
++        "minimum": 1,
++        "type": "number"
++      },
++      "labels": {
++        "description": "Label names to remove",
++        "items": {
++          "minLength": 1,
++          "type": "string"
++        },
++        "minItems": 1,
++        "type": "array"
++      },
++      "owner": {
++        "description": "Repository owner",
++        "type": "string"
++      },
++      "repo": {
++        "description": "Repository name",
++        "type": "string"
++      }
++    },
++    "required": [
++      "owner",
++      "repo",
++      "issue_number",
++      "labels"
++    ],
++    "type": "object"
++  },
++  "name": "remove_issue_labels",
++  "outputSchema": {
++    "additionalProperties": false,
++    "properties": {
++      "labels": {
++        "items": {
++          "type": "string"
++        },
++        "type": [
++          "null",
++          "array"
++        ]
++      },
++      "not_present": {
++        "items": {
++          "type": "string"
++        },
++        "type": [
++          "null",
++          "array"
++        ]
++      },
++      "number": {
++        "type": "integer"
++      }
++    },
++    "required": [
++      "number",
++      "labels"
++    ],
++    "type": "object"
++  }
++}
+\ No newline at end of file
+diff --git a/pkg/github/__toolsnaps__/request_pull_request_reviewers.snap b/pkg/github/__toolsnaps__/request_pull_request_reviewers.snap
+index 56eb0ba..2faf8b3 100644
+--- a/pkg/github/__toolsnaps__/request_pull_request_reviewers.snap
++++ b/pkg/github/__toolsnaps__/request_pull_request_reviewers.snap
+@@ -56,9 +56,15 @@
+   "outputSchema": {
+     "additionalProperties": false,
+     "properties": {
++      "html_url": {
++        "type": "string"
++      },
+       "id": {
+         "type": "string"
+       },
++      "number": {
++        "type": "integer"
++      },
+       "url": {
+         "type": "string"
+       }
+diff --git a/pkg/github/__toolsnaps__/set_issue_fields.snap b/pkg/github/__toolsnaps__/set_issue_fields.snap
+index 64b2731..cf5a7c9 100644
+--- a/pkg/github/__toolsnaps__/set_issue_fields.snap
++++ b/pkg/github/__toolsnaps__/set_issue_fields.snap
+@@ -104,9 +104,15 @@
+   "outputSchema": {
+     "additionalProperties": false,
+     "properties": {
++      "html_url": {
++        "type": "string"
++      },
+       "id": {
+         "type": "string"
+       },
++      "number": {
++        "type": "integer"
++      },
+       "url": {
+         "type": "string"
+       }
+diff --git a/pkg/github/__toolsnaps__/update_gist.snap b/pkg/github/__toolsnaps__/update_gist.snap
+index ec3ba59..4857f8d 100644
+--- a/pkg/github/__toolsnaps__/update_gist.snap
++++ b/pkg/github/__toolsnaps__/update_gist.snap
+@@ -35,9 +35,15 @@
+   "outputSchema": {
+     "additionalProperties": false,
+     "properties": {
++      "html_url": {
++        "type": "string"
++      },
+       "id": {
+         "type": "string"
+       },
++      "number": {
++        "type": "integer"
++      },
+       "url": {
+         "type": "string"
+       }
+diff --git a/pkg/github/__toolsnaps__/update_issue_assignees.snap b/pkg/github/__toolsnaps__/update_issue_assignees.snap
+index 088992d..410b972 100644
+--- a/pkg/github/__toolsnaps__/update_issue_assignees.snap
++++ b/pkg/github/__toolsnaps__/update_issue_assignees.snap
+@@ -91,9 +91,15 @@
+   "outputSchema": {
+     "additionalProperties": false,
+     "properties": {
++      "html_url": {
++        "type": "string"
++      },
+       "id": {
+         "type": "string"
+       },
++      "number": {
++        "type": "integer"
++      },
+       "url": {
+         "type": "string"
+       }
+diff --git a/pkg/github/__toolsnaps__/update_issue_body.snap b/pkg/github/__toolsnaps__/update_issue_body.snap
+index 69f75ca..659c167 100644
+--- a/pkg/github/__toolsnaps__/update_issue_body.snap
++++ b/pkg/github/__toolsnaps__/update_issue_body.snap
+@@ -53,9 +53,15 @@
+   "outputSchema": {
+     "additionalProperties": false,
+     "properties": {
++      "html_url": {
++        "type": "string"
++      },
+       "id": {
+         "type": "string"
+       },
++      "number": {
++        "type": "integer"
++      },
+       "url": {
+         "type": "string"
+       }
+diff --git a/pkg/github/__toolsnaps__/update_issue_comment.snap b/pkg/github/__toolsnaps__/update_issue_comment.snap
+index e142883..f9110fb 100644
+--- a/pkg/github/__toolsnaps__/update_issue_comment.snap
++++ b/pkg/github/__toolsnaps__/update_issue_comment.snap
+@@ -50,6 +50,10 @@
+           "id": {
+             "description": "The ID of the created comment or reaction.",
+             "type": "string"
++          },
++          "number": {
++            "description": "The number of the issue or pull request the comment is on.",
++            "type": "integer"
+           }
+         },
+         "required": [
+diff --git a/pkg/github/__toolsnaps__/update_issue_labels.snap b/pkg/github/__toolsnaps__/update_issue_labels.snap
+index c0cfa73..7c55810 100644
+--- a/pkg/github/__toolsnaps__/update_issue_labels.snap
++++ b/pkg/github/__toolsnaps__/update_issue_labels.snap
+@@ -91,9 +91,15 @@
+   "outputSchema": {
+     "additionalProperties": false,
+     "properties": {
++      "html_url": {
++        "type": "string"
++      },
+       "id": {
+         "type": "string"
+       },
++      "number": {
++        "type": "integer"
++      },
+       "url": {
+         "type": "string"
+       }
+diff --git a/pkg/github/__toolsnaps__/update_issue_milestone.snap b/pkg/github/__toolsnaps__/update_issue_milestone.snap
+index 8795e3d..a5c8eba 100644
+--- a/pkg/github/__toolsnaps__/update_issue_milestone.snap
++++ b/pkg/github/__toolsnaps__/update_issue_milestone.snap
+@@ -54,9 +54,15 @@
+   "outputSchema": {
+     "additionalProperties": false,
+     "properties": {
++      "html_url": {
++        "type": "string"
++      },
+       "id": {
+         "type": "string"
+       },
++      "number": {
++        "type": "integer"
++      },
+       "url": {
+         "type": "string"
+       }
+diff --git a/pkg/github/__toolsnaps__/update_issue_state.snap b/pkg/github/__toolsnaps__/update_issue_state.snap
+index cdb9dcd..e331b45 100644
+--- a/pkg/github/__toolsnaps__/update_issue_state.snap
++++ b/pkg/github/__toolsnaps__/update_issue_state.snap
+@@ -89,9 +89,15 @@
+   "outputSchema": {
+     "additionalProperties": false,
+     "properties": {
++      "html_url": {
++        "type": "string"
++      },
+       "id": {
+         "type": "string"
+       },
++      "number": {
++        "type": "integer"
++      },
+       "url": {
+         "type": "string"
+       }
+diff --git a/pkg/github/__toolsnaps__/update_issue_title.snap b/pkg/github/__toolsnaps__/update_issue_title.snap
+index 69a11da..acd90ec 100644
+--- a/pkg/github/__toolsnaps__/update_issue_title.snap
++++ b/pkg/github/__toolsnaps__/update_issue_title.snap
+@@ -53,9 +53,15 @@
+   "outputSchema": {
+     "additionalProperties": false,
+     "properties": {
++      "html_url": {
++        "type": "string"
++      },
+       "id": {
+         "type": "string"
+       },
++      "number": {
++        "type": "integer"
++      },
+       "url": {
+         "type": "string"
+       }
+diff --git a/pkg/github/__toolsnaps__/update_issue_type.snap b/pkg/github/__toolsnaps__/update_issue_type.snap
+index 0a8215a..48bf7b6 100644
+--- a/pkg/github/__toolsnaps__/update_issue_type.snap
++++ b/pkg/github/__toolsnaps__/update_issue_type.snap
+@@ -79,9 +79,15 @@
+   "outputSchema": {
+     "additionalProperties": false,
+     "properties": {
++      "html_url": {
++        "type": "string"
++      },
+       "id": {
+         "type": "string"
+       },
++      "number": {
++        "type": "integer"
++      },
+       "url": {
+         "type": "string"
+       }
+diff --git a/pkg/github/__toolsnaps__/update_pull_request.snap b/pkg/github/__toolsnaps__/update_pull_request.snap
+index bc61f3c..a3d9d5f 100644
+--- a/pkg/github/__toolsnaps__/update_pull_request.snap
++++ b/pkg/github/__toolsnaps__/update_pull_request.snap
+@@ -83,6 +83,9 @@
+           },
+           "id": {
+             "type": "string"
++          },
++          "number": {
++            "type": "integer"
+           }
+         },
+         "required": [
+diff --git a/pkg/github/__toolsnaps__/update_pull_request_body.snap b/pkg/github/__toolsnaps__/update_pull_request_body.snap
+index dec6052..d94c5f1 100644
+--- a/pkg/github/__toolsnaps__/update_pull_request_body.snap
++++ b/pkg/github/__toolsnaps__/update_pull_request_body.snap
+@@ -53,9 +53,15 @@
+   "outputSchema": {
+     "additionalProperties": false,
+     "properties": {
++      "html_url": {
++        "type": "string"
++      },
+       "id": {
+         "type": "string"
+       },
++      "number": {
++        "type": "integer"
++      },
+       "url": {
+         "type": "string"
+       }
+diff --git a/pkg/github/__toolsnaps__/update_pull_request_state.snap b/pkg/github/__toolsnaps__/update_pull_request_state.snap
+index aefdde8..776c1ae 100644
+--- a/pkg/github/__toolsnaps__/update_pull_request_state.snap
++++ b/pkg/github/__toolsnaps__/update_pull_request_state.snap
+@@ -57,9 +57,15 @@
+   "outputSchema": {
+     "additionalProperties": false,
+     "properties": {
++      "html_url": {
++        "type": "string"
++      },
+       "id": {
+         "type": "string"
+       },
++      "number": {
++        "type": "integer"
++      },
+       "url": {
+         "type": "string"
+       }
+diff --git a/pkg/github/__toolsnaps__/update_pull_request_title.snap b/pkg/github/__toolsnaps__/update_pull_request_title.snap
+index 7ecf5d4..2368afa 100644
+--- a/pkg/github/__toolsnaps__/update_pull_request_title.snap
++++ b/pkg/github/__toolsnaps__/update_pull_request_title.snap
+@@ -53,9 +53,15 @@
+   "outputSchema": {
+     "additionalProperties": false,
+     "properties": {
++      "html_url": {
++        "type": "string"
++      },
+       "id": {
+         "type": "string"
+       },
++      "number": {
++        "type": "integer"
++      },
+       "url": {
+         "type": "string"
+       }
+-- 
+2.50.1 (Apple Git-155)
+

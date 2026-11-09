@@ -1,0 +1,361 @@
+From d2f2eb30c52c1d1438a46d05189f2fda2ae01bb5 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 9 Nov 2026 12:50:51 -0700
+Subject: [PATCH 6/8] feat(pull_requests): create a review with inline comments
+ in one call
+
+pull_request_review_write create accepts a comments array (path, line,
+side, start_line, start_side, body). With event set, the review, its
+body and its inline comments are submitted by one addPullRequestReview
+mutation instead of create pending, add each comment, submit.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QV62ZkZa646Swi2zdbdnXN
+---
+ pkg/github/consolidated_pull_request_types.go |  29 +++--
+ pkg/github/pullrequests.go                    | 108 ++++++++++++++++-
+ pkg/github/pullrequests_test.go               | 111 ++++++++++++++++++
+ .../typed_consolidated_issue_outputs_test.go  |   2 +-
+ 4 files changed, 237 insertions(+), 13 deletions(-)
+
+diff --git a/pkg/github/consolidated_pull_request_types.go b/pkg/github/consolidated_pull_request_types.go
+index 79067d8..30febe7 100644
+--- a/pkg/github/consolidated_pull_request_types.go
++++ b/pkg/github/consolidated_pull_request_types.go
+@@ -72,15 +72,26 @@ type UpdatePullRequestBranchInput struct {
+ // PullRequestReviewWriteInput covers both feature variants; resolutionReason
+ // is advertised and used only by the resolution-reason variant.
+ type PullRequestReviewWriteInput struct {
+-	Method           string  `json:"method"`
+-	Owner            string  `json:"owner"`
+-	Repo             string  `json:"repo"`
+-	PullNumber       int     `json:"pullNumber"`
+-	Body             string  `json:"body,omitempty"`
+-	Event            string  `json:"event,omitempty"`
+-	CommitID         *string `json:"commitID,omitempty"`
+-	ThreadID         string  `json:"threadId,omitempty"`
+-	ResolutionReason *string `json:"resolutionReason,omitempty"`
++	Method           string                          `json:"method"`
++	Owner            string                          `json:"owner"`
++	Repo             string                          `json:"repo"`
++	PullNumber       int                             `json:"pullNumber"`
++	Body             string                          `json:"body,omitempty"`
++	Event            string                          `json:"event,omitempty"`
++	CommitID         *string                         `json:"commitID,omitempty"`
++	ThreadID         string                          `json:"threadId,omitempty"`
++	ResolutionReason *string                         `json:"resolutionReason,omitempty"`
++	Comments         []PullRequestReviewCommentInput `json:"comments,omitempty"`
++}
++
++// PullRequestReviewCommentInput is one inline comment of a review created with pull_request_review_write.
++type PullRequestReviewCommentInput struct {
++	Path      string `json:"path" mapstructure:"path"`
++	Line      int32  `json:"line" mapstructure:"line"`
++	Side      string `json:"side,omitempty" mapstructure:"side"`
++	StartLine int32  `json:"start_line,omitempty" mapstructure:"start_line"`
++	StartSide string `json:"start_side,omitempty" mapstructure:"start_side"`
++	Body      string `json:"body" mapstructure:"body"`
+ }
+ 
+ type AddCommentToPendingReviewInput struct {
+diff --git a/pkg/github/pullrequests.go b/pkg/github/pullrequests.go
+index 531bb2d..aa06af0 100644
+--- a/pkg/github/pullrequests.go
++++ b/pkg/github/pullrequests.go
+@@ -1986,6 +1986,7 @@ type PullRequestReviewWriteParams struct {
+ 	CommitID         *string
+ 	ThreadID         string
+ 	ResolutionReason *string
++	Comments         []PullRequestReviewCommentInput
+ }
+ 
+ func PullRequestReviewWrite(t translations.TranslationHelperFunc) inventory.ServerTool {
+@@ -2045,6 +2046,46 @@ func pullRequestReviewWrite(t translations.TranslationHelperFunc, withResolution
+ 				Type:        "string",
+ 				Description: "The node ID of the review thread (e.g., PRRT_kwDOxxx). Required for resolve_thread and unresolve_thread methods. Get thread IDs from pull_request_read with method get_review_comments.",
+ 			},
++			"comments": {
++				Type:        "array",
++				Description: "Inline comments to add with the review. Only used by the create method.",
++				Items: &jsonschema.Schema{
++					Type:                 "object",
++					AdditionalProperties: &jsonschema.Schema{Not: &jsonschema.Schema{}},
++					Properties: map[string]*jsonschema.Schema{
++						"path": {
++							Type:        "string",
++							Description: "File path relative to the repository root",
++						},
++						"line": {
++							Type:        "integer",
++							Description: "Line number in the file to comment on; the last line for a multi-line comment",
++							Minimum:     new(1.0),
++						},
++						"side": {
++							Type:        "string",
++							Description: "Diff side of the line: RIGHT (the new version, default) or LEFT (the old version)",
++							Enum:        []any{"LEFT", "RIGHT"},
++						},
++						"start_line": {
++							Type:        "integer",
++							Description: "First line of a multi-line comment",
++							Minimum:     new(1.0),
++						},
++						"start_side": {
++							Type:        "string",
++							Description: "Diff side of start_line (defaults to side)",
++							Enum:        []any{"LEFT", "RIGHT"},
++						},
++						"body": {
++							Type:        "string",
++							Description: "Comment text",
++							MinLength:   new(1),
++						},
++					},
++					Required: []string{"path", "line", "body"},
++				},
++			},
+ 		},
+ 		Required: []string{"method", "owner", "repo", "pullNumber"},
+ 	}
+@@ -2063,7 +2104,7 @@ func pullRequestReviewWrite(t translations.TranslationHelperFunc, withResolution
+ 			Description: t("TOOL_PULL_REQUEST_REVIEW_WRITE_DESCRIPTION", `Create and/or submit, delete review of a pull request.
+ 
+ Available methods:
+-- create: Create a new review of a pull request. If "event" parameter is provided, the review is submitted. If "event" is omitted, a pending review is created.
++- create: Create a new review of a pull request. If "event" parameter is provided, the review is submitted. If "event" is omitted, a pending review is created. Inline comments passed in "comments" are added to the review, so body, event and comments take a single call.
+ - submit_pending: Submit an existing pending review of a pull request. This requires that a pending review exists for the current user on the specified pull request. The "body" and "event" parameters are used when submitting the review.
+ - delete_pending: Delete an existing pending review of a pull request. This requires that a pending review exists for the current user on the specified pull request.
+ - resolve_thread: Resolve a review thread. Requires only "threadId" parameter with the thread's node ID (e.g., PRRT_kwDOxxx). The owner, repo, and pullNumber parameters are not used for this method. Resolving an already-resolved thread is a no-op.
+@@ -2086,6 +2127,10 @@ Available methods:
+ 				return utils.NewToolResultError(err.Error()), nil, nil
+ 			}
+ 
++			if len(params.Comments) > 0 && params.Method != "create" {
++				return utils.NewToolResultError("comments can only be used with the create method"), nil, nil
++			}
++
+ 			// Given our owner, repo and PR number, lookup the GQL ID of the PR.
+ 			client, err := deps.GetGQLClient(ctx)
+ 			if err != nil {
+@@ -2143,6 +2188,11 @@ Available methods:
+ }
+ 
+ func CreatePullRequestReview(ctx context.Context, client *githubv4.Client, params PullRequestReviewWriteParams) (*mcp.CallToolResult, error) {
++	threads, err := draftPullRequestReviewThreads(params.Comments)
++	if err != nil {
++		return utils.NewToolResultError(err.Error()), nil
++	}
++
+ 	var getPullRequestQuery struct {
+ 		Repository struct {
+ 			PullRequest struct {
+@@ -2181,6 +2231,9 @@ func CreatePullRequestReview(ctx context.Context, client *githubv4.Client, param
+ 		addPullRequestReviewInput.Event = newGQLStringlike[githubv4.PullRequestReviewEvent](params.Event)
+ 		addPullRequestReviewInput.Body = githubv4.NewString(githubv4.String(params.Body))
+ 	}
++	if len(threads) > 0 {
++		addPullRequestReviewInput.Threads = &threads
++	}
+ 
+ 	if err := client.Mutate(
+ 		ctx,
+@@ -2194,10 +2247,59 @@ func CreatePullRequestReview(ctx context.Context, client *githubv4.Client, param
+ 	// Return nothing interesting, just indicate success for the time being.
+ 	// In future, we may want to return the review ID, but for the moment, we're not leaking
+ 	// API implementation details to the LLM.
++	var withComments string
++	if len(threads) > 0 {
++		withComments = fmt.Sprintf(" with %d inline comments", len(threads))
++	}
+ 	if params.Event == "" {
+-		return utils.NewToolResultText("pending pull request created"), nil
++		return utils.NewToolResultText("pending pull request created" + withComments), nil
++	}
++	return utils.NewToolResultText("pull request review submitted successfully" + withComments), nil
++}
++
++// draftPullRequestReviewThreads converts inline review comments into the
++// threads of an addPullRequestReview mutation.
++func draftPullRequestReviewThreads(comments []PullRequestReviewCommentInput) ([]*githubv4.DraftPullRequestReviewThread, error) {
++	threads := make([]*githubv4.DraftPullRequestReviewThread, 0, len(comments))
++	for i, comment := range comments {
++		if comment.Path == "" || comment.Body == "" || comment.Line < 1 {
++			return nil, fmt.Errorf("comments[%d] needs a path, a body and a line of at least 1", i)
++		}
++		side, err := reviewDiffSide(comment.Side, githubv4.DiffSideRight)
++		if err != nil {
++			return nil, fmt.Errorf("comments[%d]: %w", i, err)
++		}
++		thread := &githubv4.DraftPullRequestReviewThread{
++			Path: githubv4.NewString(githubv4.String(comment.Path)),
++			Body: githubv4.String(comment.Body),
++			Line: githubv4.NewInt(githubv4.Int(comment.Line)),
++			Side: &side,
++		}
++		if comment.StartLine != 0 {
++			if comment.StartLine < 1 || comment.StartLine > comment.Line {
++				return nil, fmt.Errorf("comments[%d]: start_line must be between 1 and line", i)
++			}
++			startSide, err := reviewDiffSide(comment.StartSide, side)
++			if err != nil {
++				return nil, fmt.Errorf("comments[%d]: %w", i, err)
++			}
++			thread.StartLine = githubv4.NewInt(githubv4.Int(comment.StartLine))
++			thread.StartSide = &startSide
++		}
++		threads = append(threads, thread)
++	}
++	return threads, nil
++}
++
++func reviewDiffSide(side string, fallback githubv4.DiffSide) (githubv4.DiffSide, error) {
++	switch side {
++	case "":
++		return fallback, nil
++	case "LEFT", "RIGHT":
++		return githubv4.DiffSide(side), nil
++	default:
++		return "", fmt.Errorf("side must be LEFT or RIGHT, not %q", side)
+ 	}
+-	return utils.NewToolResultText("pull request review submitted successfully"), nil
+ }
+ 
+ func SubmitPendingPullRequestReview(ctx context.Context, client *githubv4.Client, params PullRequestReviewWriteParams) (*mcp.CallToolResult, error) {
+diff --git a/pkg/github/pullrequests_test.go b/pkg/github/pullrequests_test.go
+index 778ab9e..872a16b 100644
+--- a/pkg/github/pullrequests_test.go
++++ b/pkg/github/pullrequests_test.go
+@@ -3524,6 +3524,117 @@ func TestCreateAndSubmitPullRequestReview(t *testing.T) {
+ 	}
+ }
+ 
++func TestCreatePullRequestReviewWithInlineComments(t *testing.T) {
++	t.Parallel()
++
++	schema := PullRequestReviewWrite(translations.NullTranslationHelper).Tool.InputSchema.(*jsonschema.Schema)
++	assert.Contains(t, schema.Properties, "comments")
++
++	pullRequestQuery := githubv4mock.NewQueryMatcher(
++		struct {
++			Repository struct {
++				PullRequest struct {
++					ID githubv4.ID
++				} `graphql:"pullRequest(number: $prNum)"`
++			} `graphql:"repository(owner: $owner, name: $repo)"`
++		}{},
++		map[string]any{
++			"owner": githubv4.String("owner"),
++			"repo":  githubv4.String("repo"),
++			"prNum": githubv4.Int(42),
++		},
++		githubv4mock.DataResponse(map[string]any{
++			"repository": map[string]any{"pullRequest": map[string]any{"id": "PR_kwDODKw3uc6WYN1T"}},
++		}),
++	)
++	right, left := githubv4.DiffSideRight, githubv4.DiffSideLeft
++	threads := []*githubv4.DraftPullRequestReviewThread{
++		{
++			Path: githubv4.NewString("main.go"),
++			Body: githubv4.String("Handle the error"),
++			Line: githubv4.NewInt(12),
++			Side: &right,
++		},
++		{
++			Path:      githubv4.NewString("old.go"),
++			Body:      githubv4.String("This block was needed"),
++			Line:      githubv4.NewInt(8),
++			Side:      &left,
++			StartLine: githubv4.NewInt(5),
++			StartSide: &left,
++		},
++	}
++	mutation := githubv4mock.NewMutationMatcher(
++		struct {
++			AddPullRequestReview struct {
++				PullRequestReview struct {
++					ID githubv4.ID
++				}
++			} `graphql:"addPullRequestReview(input: $input)"`
++		}{},
++		githubv4.AddPullRequestReviewInput{
++			PullRequestID: githubv4.ID("PR_kwDODKw3uc6WYN1T"),
++			Body:          githubv4.NewString("Two things to fix"),
++			Event:         githubv4mock.Ptr(githubv4.PullRequestReviewEventRequestChanges),
++			Threads:       &threads,
++		},
++		nil,
++		githubv4mock.DataResponse(map[string]any{}),
++	)
++	comments := []any{
++		map[string]any{"path": "main.go", "line": 12, "body": "Handle the error"},
++		map[string]any{"path": "old.go", "line": 8, "side": "LEFT", "start_line": 5, "body": "This block was needed"},
++	}
++
++	tests := []struct {
++		name         string
++		args         map[string]any
++		expectedText string
++		expectError  bool
++	}{
++		{
++			name: "submits the review and its inline comments in one call",
++			args: map[string]any{
++				"method": "create", "owner": "owner", "repo": "repo", "pullNumber": float64(42),
++				"body": "Two things to fix", "event": "REQUEST_CHANGES", "comments": comments,
++			},
++			expectedText: "pull request review submitted successfully with 2 inline comments",
++		},
++		{
++			name: "rejects comments on other methods",
++			args: map[string]any{
++				"method": "submit_pending", "owner": "owner", "repo": "repo", "pullNumber": float64(42),
++				"event": "COMMENT", "comments": comments,
++			},
++			expectedText: "comments can only be used with the create method",
++			expectError:  true,
++		},
++		{
++			name: "rejects a start_line after line",
++			args: map[string]any{
++				"method": "create", "owner": "owner", "repo": "repo", "pullNumber": float64(42), "event": "COMMENT",
++				"comments": []any{map[string]any{"path": "main.go", "line": 3, "start_line": 9, "body": "Range"}},
++			},
++			expectedText: "comments[0]: start_line must be between 1 and line",
++			expectError:  true,
++		},
++	}
++
++	for _, tc := range tests {
++		t.Run(tc.name, func(t *testing.T) {
++			t.Parallel()
++			client := githubv4.NewClient(githubv4mock.NewMockedHTTPClient(pullRequestQuery, mutation))
++			serverTool := PullRequestReviewWrite(translations.NullTranslationHelper)
++			deps := BaseDeps{GQLClient: client}
++			request := createMCPRequest(tc.args)
++			result, err := serverTool.Handler(deps)(ContextWithDeps(context.Background(), deps), &request)
++			require.NoError(t, err)
++			assert.Equal(t, tc.expectError, result.IsError)
++			assert.Equal(t, tc.expectedText, getTextResult(t, result).Text)
++		})
++	}
++}
++
+ func TestCreatePendingPullRequestReview(t *testing.T) {
+ 	t.Parallel()
+ 
+diff --git a/pkg/github/typed_consolidated_issue_outputs_test.go b/pkg/github/typed_consolidated_issue_outputs_test.go
+index 80cfb62..72be875 100644
+--- a/pkg/github/typed_consolidated_issue_outputs_test.go
++++ b/pkg/github/typed_consolidated_issue_outputs_test.go
+@@ -610,7 +610,7 @@ func TestTypedIssueWriteMutationOptionalityAndFields(t *testing.T) {
+ 					Labels []string `json:"labels"`
+ 				}
+ 				require.NoError(t, json.Unmarshal(body, &sent))
+-				response := &github.Issue{ID: new(int64(123)), HTMLURL: new("https://github.com/owner/repo/issues/1")}
++				response := &github.Issue{ID: new(int64(123)), Number: new(1), HTMLURL: new("https://github.com/owner/repo/issues/1")}
+ 				for _, label := range sent.Labels {
+ 					response.Labels = append(response.Labels, &github.Label{Name: label})
+ 				}
+-- 
+2.50.1 (Apple Git-155)
+

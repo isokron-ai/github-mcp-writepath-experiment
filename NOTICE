@@ -1,0 +1,10 @@
+github-mcp-writepath-experiment
+
+Based on github/github-mcp-server (https://github.com/github/github-mcp-server),
+tag v2.1.0, commit 4bcdcdf8. Copyright (c) 2025 GitHub. MIT License (see LICENSE).
+
+The experiment commits on top of v2.1.0 are by IsoKron (Stormhaven Enterprises LLC),
+https://isokron.ai, released under the MIT License.
+
+Not affiliated with, sponsored by, or endorsed by GitHub. "GitHub" is a trademark of
+GitHub, Inc., used here only to identify the upstream project.
