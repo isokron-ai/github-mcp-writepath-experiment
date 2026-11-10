@@ -1,13 +1,14 @@
 # Support
 
-## How to file issues and get help
+No support is offered for this repository. It is a research experiment by
+[IsoKron](https://isokron.ai), published so the changes can be inspected and the
+measurement reproduced. See [EXPERIMENT.md](EXPERIMENT.md).
 
-This project uses GitHub issues to track bugs and feature requests. Please search the existing issues before filing new issues to avoid duplicates. For new issues, file your bug or feature request as a new issue.
+- **Your reproduction disagrees with ours:** please open an issue with the job, model,
+  client version and counts (tool calls, turns, failed calls). These reports are welcome.
+- **Help using the GitHub MCP server:** use the official project,
+  [github/github-mcp-server](https://github.com/github/github-mcp-server). This
+  repository is not affiliated with GitHub.
 
-For help or questions about using this project, please open an issue.
-
-- The `github-mcp-server` is under active development and maintained by GitHub staff **AND THE COMMUNITY**. We will do our best to respond to support, feature requests, and community questions in a timely manner.
-
-## GitHub Support Policy
-
-Support for this project is limited to the resources listed above.
+This build is based on upstream v2.1.0 and is not maintained against later upstream
+versions.
