@@ -5,7 +5,7 @@ Source: [IsoKron, GitHub MCP server audit (v2.1.0)](https://isokron.ai/research/
 
 An IsoKron experimental build of v2.1.0 with a combined set of write-path fixes and usability changes cut MCP tool calls by 26% and turns by 18% per round of four jobs, and failed calls from 3 to 1, with all 24 runs passing. Results measure the combined set, not each change individually. For why we count calls and turns rather than tokens, see [why MCP tool design matters](https://isokron.ai/research/why-mcp-tool-design-matters).
 
-Method: the four write-phase jobs, run 3 times each on v2.1.0 and 3 times each on the experimental build, by Claude Opus (claude-opus-5) in Claude Code 2.1.241 with MCP tools only. The harness was hashed and frozen before the first run, the repository was reset to the same state before every run, and only the server image changed between phases.
+Method: the four write-phase jobs, run 3 times each on v2.1.0 and 3 times each on the experimental build, by a frontier model in an agent CLI (2.1.241) with MCP tools only. The harness was hashed and frozen before the first run, the repository was reset to the same state before every run, and only the server image changed between phases.
 
 The experimental build adds write results that return the issue or PR number and URL; a one-call review with inline comments; consistent review-comment IDs; add-label and remove-label tools; per-field issue-field writes (the GH-01 fix); a whole-repo file list and multi-file read; create_branch from a SHA; a version check on delete_file and no folder deletes; push_files without silent branch creation or orphan branches; and an error on no-op updates.
 
@@ -35,5 +35,5 @@ Values are medians over 3 runs, with [min–max]. Bold marks non-overlapping obs
 
 ### Catalog size
 
-The experimental build's four extra tools add 984 tokens to the catalog, +9 to 10%. For reference, v2.1.0's default toolsets are about 11.2K model-visible tokens and all 91 tools about 23.4K; icons make up 56% of the full tools/list bytes. Token figures use cl100k as a common baseline; cl100k is not Claude's tokenizer, and the figures are estimates of definition size. How much of the catalog reaches the model depends on the client: in these runs Claude Code loaded definitions on demand through its tool search, while a client that loads every definition up front puts the whole catalog in context on every turn.
+The experimental build's four extra tools add 984 tokens to the catalog, +9 to 10%. For reference, v2.1.0's default toolsets are about 11.2K model-visible tokens and all 91 tools about 23.4K; icons make up 56% of the full tools/list bytes. Token figures use cl100k as a common baseline; cl100k is not the agent model's tokenizer, and the figures are estimates of definition size. How much of the catalog reaches the model depends on the client: in these runs the agent CLI loaded definitions on demand through its tool search, while a client that loads every definition up front puts the whole catalog in context on every turn.
 

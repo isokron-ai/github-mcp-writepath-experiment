@@ -34,7 +34,7 @@ Details, files and tests for each: [CHANGES-EXPERIMENT.md](CHANGES-EXPERIMENT.md
 
 Four write-phase jobs (bug fix to merged PR, PR review with 3 inline comments, triage
 of 10 issues, a rename across 3 files in one commit), 3 runs each on v2.1.0 and 3 on
-this build: 24 runs by Claude Opus in Claude Code 2.1.241 with MCP tools only. The
+this build: 24 runs by a frontier model in an agent CLI (2.1.241) with MCP tools only. The
 harness was hashed and frozen before the first run, the repository was reset to the
 same state before every run, and only the server image changed between builds.
 

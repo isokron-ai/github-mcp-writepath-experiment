@@ -185,7 +185,7 @@ Commit `feat(repos): add list_repository_files and get_files`.
 
 Same method as the audit: per tool, the JSON of `name` + `description` +
 `inputSchema` (compact, sorted keys), summed; tokens with tiktoken
-`cl100k_base` (reference scale, not a Claude tokenizer). Both servers run as
+`cl100k_base` (reference scale, not the agent model's tokenizer). Both servers run as
 images over stdio with the same token (`tools/measure.py`, raw data in
 `toolsize.json`).
 
